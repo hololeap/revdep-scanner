@@ -1,0 +1,33 @@
+cabal-version:      3.4
+name:               revdep-scanner
+version:            0.0.0.0
+synopsis:           Scan Gentoo repositories for reverse dependencies
+
+tested-with:        GHC == { 9.0.2, 9.2.8, 9.4.8, 9.6.6, 9.8.4, 9.10.1 }
+-- description:
+homepage:           https://github.com/hololeap/revdep-scanner
+license:            GPL-3.0-or-later
+license-file:       LICENSE
+author:             hololeap
+maintainer:         hololeap@protonmail.com
+copyright:          Copyright (C) 2025 hololeap
+category:           Development
+build-type:         Simple
+extra-doc-files:
+    CHANGELOG.md
+    README.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+executable dep-scanner
+    import:           warnings
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends:
+        , base ^>=4.17.2.1
+        , portage-hs ^>=0.1
+    hs-source-dirs:   src-exe
+    default-language: GHC2021
