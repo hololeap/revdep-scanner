@@ -1,7 +1,12 @@
+{-# Language DeriveAnyClass #-}
 {-# Language DeriveTraversable #-}
 {-# Language DerivingVia #-}
+{-# Language GeneralizedNewtypeDeriving #-}
 {-# Language LambdaCase #-}
+{-# Language StandaloneDeriving #-}
 {-# Language TypeApplications #-}
+
+{-# Options_GHC -Wno-orphans #-}
 
 module Main where
 
@@ -10,6 +15,7 @@ import Control.Monad
 import Control.Monad.Trans.Accum
 import qualified Data.ByteString as BS
 import Data.Function (on)
+import Data.Hashable
 import Data.List as L
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty(..))
@@ -18,6 +24,8 @@ import           Data.HashMap.Strict (HashMap)
 import qualified Data.HashSet as S
 import           Data.HashSet (HashSet)
 import Data.Maybe (fromMaybe, isJust, isNothing)
+import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text.Lazy as TL
 import Data.Conduit.Process
 import Data.Monoid
@@ -26,13 +34,28 @@ import System.Console.GetOpt
 import System.Environment
 import System.Exit
 import System.IO (Handle, stdout, stderr, hPutStrLn)
-import Text.Parsec.Char
-import Text.Parsec.String
 
 import Text.Pretty.Simple (pPrintForceColor)
 
 import Data.Parsable
 import Distribution.Portage.Types
+
+-- -Worphans is turned off for this
+-- This should probably be moved to its own module, possibly in the
+-- gentoo-utils package, or in a new package?
+deriving newtype instance Hashable Category
+deriving newtype instance Hashable PkgName
+deriving newtype instance Hashable VersionNum
+deriving newtype instance Hashable VersionLetter
+deriving anyclass instance Hashable VersionSuffix
+deriving newtype instance Hashable VersionSuffixNum
+deriving newtype instance Hashable VersionRevision
+deriving anyclass instance Hashable Version
+deriving anyclass instance Hashable Slot
+deriving newtype instance Hashable SubSlot
+deriving newtype instance Hashable Repository
+deriving anyclass instance Hashable ConstrainedDep
+deriving anyclass instance Hashable Operator
 
 main :: IO ()
 main = do
@@ -163,34 +186,36 @@ unionCM = M.unionWith (M.unionWith S.union)
 
 -- Parsing
 
-parseAll :: TL.Text -> Either ParseError ConstraintMap
+parseAll :: TL.Text -> Either (Maybe String) ConstraintMap
 parseAll t = do
-    cms <- evalAccumT (traverse parseLine (TL.lines t)) (Sum 1)
+    cms <- traverse parseLine (TL.lines t)
     pure $ foldr unionCM M.empty cms
   where
-    parseLine :: TL.Text -> AccumT (Sum Int) (Either ParseError) ConstraintMap
+    parseLine :: TL.Text -> Either (Maybe String) ConstraintMap
     parseLine l = do
-        Sum i <- look
-        add (Sum 1)
-        lift $ parse lineParser ("line " ++ show i) (TL.unpack l)
+        extractResult $ runParser lineParser (encodeLazyText l)
 
-lineParser :: Parser ConstraintMap
+lineParser :: Parser String ConstraintMap
 lineParser = do
-    ConstrainedDep Equal rdCat rdPkg rdVer (Just rdSlot) (Just rdRepo) <-
-        parser @ConstrainedDep -- parser from Data.Parsable
-    let revdep = (rdCat, rdPkg, rdVer, rdSlot, rdRepo)
-    cds <- bruteForce
-    pure $ foldr (insertCM revdep) M.empty cds
+    parser @ConstrainedDep >>= \case -- parser from Data.Parsable
+        ConstrainedDep Equal rdCat rdPkg rdVer (Just rdSlot) (Just rdRepo) -> do
+            let revdep = (rdCat, rdPkg, rdVer, rdSlot, rdRepo)
+            cds <- bruteForce
+            pure $ foldr (insertCM revdep) M.empty cds
+        cd -> err $ "Invalid ConstrainedDep: " ++ show cd
   where
     -- Start with char 0, see if it's a valid ConstrainedDep /or/ Package.
     -- Try next char, see if it's a valid ConstrainedDep /or Package.
     -- etc...
-    bruteForce :: Parser [ParsedDep]
+    bruteForce :: Parser String [ParsedDep]
     bruteForce = choice
         [ try $ (:) <$> (Left <$> parser @ConstrainedDep) <*> bruteForce
         , try $ do
-            Package c n Nothing _ _ <- parser
-            (Right (c,n) :) <$> bruteForce
+--             Package c n Nothing _ _ <- parser
+            parser >>= \case
+                Package c n Nothing _ _ ->
+                    (Right (c,n) :) <$> bruteForce
+                p -> err $ "Invalid Package: " ++ show p
         , try $ [] <$ eof
         , anyChar *> bruteForce
         ]
@@ -268,18 +293,18 @@ checkArgs :: IO (NonEmpty Package, MatchMode, Repository, Debug)
 checkArgs = do
     progName <- getProgName
     argv <- getArgs
-    let err str = showHelp progName *> die ("error: " ++ str)
+    let goErr str = showHelp progName *> die ("error: " ++ str)
 
     case getOpt Permute options argv of
-        (_,_,es@(_:_)) -> err (intercalate " " es)
+        (_,_,es@(_:_)) -> goErr (intercalate " " es)
 
         (ms,as,_) -> case (mconcat ms, NE.nonEmpty as) of
             (HelpMode, _) -> showHelp progName *> exitSuccess
-            (_, Nothing) -> err "At least one full package name (and optional \
+            (_, Nothing) -> goErr "At least one full package name (and optional \
                            \version) required"
             (NormalMode (Last mm) (Last mr) d, Just pStrs) ->
-                case traverse (runParsable "command line argument") pStrs of
-                    Left e -> err $
+                case traverse (runParsable . encodeString) pStrs of
+                    Left e -> goErr $
                         "Invalid package: " ++ show e
                     Right ps -> do
                         m <- case mm of
@@ -330,3 +355,9 @@ checkArgs = do
                              \packages were given on the command\n\
                              \line. Defaulting to \"non-matching mode\"."
             pure NonMatching
+
+encodeString :: String -> BS.ByteString
+encodeString = encodeUtf8 . T.pack
+
+encodeLazyText :: TL.Text -> BS.ByteString
+encodeLazyText = encodeUtf8 . TL.toStrict
