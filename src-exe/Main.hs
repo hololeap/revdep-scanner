@@ -1,19 +1,23 @@
+{-# Language ApplicativeDo #-}
 {-# Language DeriveAnyClass #-}
 {-# Language DeriveTraversable #-}
 {-# Language DerivingVia #-}
 {-# Language GeneralizedNewtypeDeriving #-}
 {-# Language LambdaCase #-}
+{-# Language OverloadedStrings #-}
 {-# Language StandaloneDeriving #-}
+{-# Language TemplateHaskell #-}
+{-# Language TupleSections #-}
 {-# Language TypeApplications #-}
 
-{-# Options_GHC -Wno-orphans #-}
-
-module Main where
+module Main (main) where
 
 import Conduit
 import Control.Monad
+import Control.Monad.Reader
 import Control.Monad.Trans.Accum
 import qualified Data.ByteString as BS
+import Data.Either (isLeft, isRight)
 import Data.Function (on)
 import Data.Hashable
 import Data.List as L
@@ -23,60 +27,48 @@ import qualified Data.HashMap.Strict as M
 import           Data.HashMap.Strict (HashMap)
 import qualified Data.HashSet as S
 import           Data.HashSet (HashSet)
-import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
-import qualified Data.Text.Lazy as TL
-import Data.Conduit.Process
 import Data.Monoid
-import System.Directory
+import GHC.Generics
 import System.Console.GetOpt
 import System.Environment
 import System.Exit
-import System.IO (Handle, stdout, stderr, hPutStrLn)
+import System.IO (stderr, hPutStrLn)
 
 import Text.Pretty.Simple (pPrintForceColor)
 
-import Data.Parsable
+import Data.Parsable hiding ((<|>))
 import Distribution.Portage.Types
-
--- -Worphans is turned off for this
--- This should probably be moved to its own module, possibly in the
--- gentoo-utils package, or in a new package?
-deriving newtype instance Hashable Category
-deriving newtype instance Hashable PkgName
-deriving newtype instance Hashable VersionNum
-deriving newtype instance Hashable VersionLetter
-deriving anyclass instance Hashable VersionSuffix
-deriving newtype instance Hashable VersionSuffixNum
-deriving newtype instance Hashable VersionRevision
-deriving anyclass instance Hashable Version
-deriving anyclass instance Hashable Slot
-deriving newtype instance Hashable SubSlot
-deriving newtype instance Hashable Repository
-deriving anyclass instance Hashable ConstrainedDep
-deriving anyclass instance Hashable Operator
+import Distribution.Portage.Types.Orphans ()
+import Distribution.Gentoo.Utils.Exe
+import Distribution.Gentoo.Utils.Pquery
 
 main :: IO ()
 main = do
-    pquery <- runEnv pqueryPath
-    (ps, mode, repoName, Any d) <- checkArgs
+    (ps, mode, repo, Any d) <- checkArgs
 
-    when d $ print $ pquery : args repoName
+    vDeps <- runExeEnv $ do
+        when d $ liftIO $ print $ unwords $ "pquery" : args repo
+        getPqueryDump ["--repo", unwrapRepository repo] buildCMap
 
-    let f = if d then runTransparent else runOpaque
+    case vDeps of
+        Failure es -> error $ "Parsing failure: " ++ show es
+        Success deps -> do
+            let (m :: ConstraintMap) = foldl' unionCM M.empty deps
 
-    (_, out, _) <- f pquery (args repoName)
-    Right (m :: ConstraintMap) <- pure $ parseAll out
+            when d $ pPrintForceColor deps
 
-    when d $ pPrintForceColor m
-
-    let ls = ps >>= \p -> do
-            let r = lookupResults mode p m
-            case mode of
-                Matching -> prettyMatches p r
-                NonMatching -> prettyProblems p r
-    putStr $ unlines $ NE.toList ls
+            let ls = ps >>= \ep -> do
+                    let p = case ep of
+                            Left p' -> p'
+                            Right (PkgWithVer p' _) -> p'
+                        r = lookupResults mode ep m
+                    case mode of
+                        Matching -> prettyMatches p r
+                        NonMatching -> prettyProblems p r
+            putStr $ unlines $ NE.toList ls
   where
     args (Repository n) =
         [ "--all"
@@ -93,9 +85,60 @@ main = do
         , "--slot"
         ]
 
+-- | Build a 'ConstraintMap' by scanning the contents of a 'PkgDeps' entry
+buildCMap :: PkgDeps -> ConstraintMap
+-- TODO: Should pquery/PkgDeps ignore the slot value completely?
+buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
+    -- Needs to find all packages referenced by any of the blocks, note
+    -- which package the dep block lives in, and its name.
+    flip evalAccum mempty $ flip foldMapA
+        [ (DEPEND, depBlock)
+        , (RDEPEND, rdepBlock)
+        , (BDEPEND, bdepBlock)
+        , (PDEPEND, pdepBlock)
+        , (IDEPEND, idepBlock)
+        ] $ \(var, DepBlock blk) ->
+            foldM groupFold M.empty blk `runReaderT` var
+  where
+    fromGroup
+        :: Either DepGroup DepSpec
+        -> ReaderT DepVar (Accum (First DepContext)) ConstraintMap
+    fromGroup = \case
+        Left g -> case g of
+            -- "And" groups are very basic. We don't need to remember them
+            AndGroup ne -> foldM groupFold M.empty ne
+            -- The other groups are more complex and should be saved as
+            -- context for the output
+            OrGroup ne -> do
+                lift $ add $ pure $ AnyCtx ne
+                foldM groupFold M.empty ne
+            UseGroup ne u -> do
+                lift $ add $ pure $ UseCtx ne u
+                foldM groupFold M.empty ne
+            NotUseGroup ne u -> do
+                lift $ add $ pure $ NotUseCtx ne u
+                foldM groupFold M.empty ne
+        Right s -> do
+            var <- ask
+            First mCtx <- lift look
+            -- Extract the package from the entry's DepSpec
+            let p = case s of
+                        VersionedDepSpec _ p' _ _ -> vPkgPackage p'
+                        UnversionedDepSpec _ p' _ _ -> p'
+            pure $ insertCM p (PkgWithVer p0 v0) var s mCtx M.empty
+
+    groupFold
+        :: ConstraintMap
+        -> Either DepGroup DepSpec
+        -> ReaderT DepVar (Accum (First DepContext)) ConstraintMap
+    groupFold m g = M.unionWith (M.unionWith S.union) m <$> fromGroup g
+
+    foldMapA :: (Applicative f, Foldable t, Monoid b) => (a -> f b) -> t a -> f b
+    foldMapA f = getAp . foldMap (Ap . f)
+
 prettyProblems
     :: Package
-    -> HashMap Revdep (HashSet ParsedDep)
+    -> ResultMap
     -> NonEmpty String
 prettyProblems p m
     | M.null m = NE.singleton
@@ -106,7 +149,7 @@ prettyProblems p m
 
 prettyMatches
     :: Package
-    -> HashMap Revdep (HashSet ParsedDep)
+    -> ResultMap
     -> NonEmpty String
 prettyMatches p m
     | M.null m = NE.singleton
@@ -115,156 +158,143 @@ prettyMatches p m
         = (toString p ++ ":")
         :| prettyResults m
 
-prettyResults :: HashMap Revdep (HashSet ParsedDep) -> [String]
+prettyResults :: ResultMap -> [String]
 prettyResults m =
-          sortBy (compare `on` fst) (M.toList m) >>= \((c,n,v,sl,r),s) ->
-                let p = Package c n (Just v) (Just sl) (Just r)
-                    svs = sortBy cmp (S.toList s)
-                in  [ "    " ++ toString p
-                    , "        ( " ++ L.intercalate " " (map toStr svs) ++ " )"
-                    ]
+    sortBy (compare `on` fst) (M.toList m) >>= \((PkgWithVer p v),s) ->
+        let p' = VPkgEq p v
+            svs = sortBy cmp (S.toList s)
+        in  [ "    " ++ toString p'
+            , "        ( " ++ L.intercalate " " (map toStr svs) ++ " )"
+            ]
   where
-    cmp :: ParsedDep -> ParsedDep -> Ordering
-    cmp pd1 pd2 = case (pd1, pd2) of
-        (Left (ConstrainedDep _ _ _ v1 _ _), Left (ConstrainedDep _ _ _ v2 _ _))
-            -> v1 `compare` v2
-        (Left _, Right _) -> GT
-        (Right _, Left _) -> LT
+    cmp :: DepWithCtx -> DepWithCtx -> Ordering
+    cmp dwc1 dwc2 = case (dwcDepSpec dwc1, dwcDepSpec dwc2) of
+        (VersionedDepSpec _ vpkg1 _ _, VersionedDepSpec _ vpkg2 _ _)
+            -> vpkg1 `compare` vpkg2
+        (VersionedDepSpec _ _ _ _, UnversionedDepSpec _ _ _ _) -> GT
+        (UnversionedDepSpec _ _ _ _, VersionedDepSpec _ _ _ _) -> LT
         (_, _) -> EQ
 
-    toStr :: ParsedDep -> String
+    toStr :: DepWithCtx -> String
     toStr = \case
-        Left cd -> toString cd
-        Right (c,n) -> toString $ Package c n Nothing Nothing Nothing
+        DepWithCtx _ dv (Just ctx) -> toString dv ++ ": " ++ toString ctx
+        DepWithCtx ds dv Nothing -> toString dv ++ ": " ++ toString ds
 
+-- | Given the 'MatchMode' and a package given on the command line (either
+--   'Package' or 'PkgWithVer'), look up a mapping of reverse dependencies
+--   to dependencies in the 'ConstraintMap'.
+--
+--   For instance, looking up @dev-haskell/cabal@ would produce a mapping:
+--
+--   @@@
+--   (revdep of dev-haskell/cabal e.g. 'PkgWithVer')
+--       -> ( relevant dependencies containing dev-haskell/cabal
+--            e.g. (HashSet ('DepVar', 'DepSpec', Maybe 'DepContext'))
+--          )
+--   @@@
 lookupResults
     :: MatchMode
-    -> Package
+    -> Either Package PkgWithVer
     -> ConstraintMap
-    -> HashMap Revdep (HashSet ParsedDep)
-lookupResults mode p0@(Package c0 n0 _ _ _) m0 =
-    case M.lookup (c0, n0) m0 of
-        Just m -> foldr (M.unionWith S.union . go) M.empty (M.toList m)
-        Nothing -> M.empty
+    -> ResultMap
+lookupResults mode ep =
+    foldMap (M.filter (any check)) . M.lookup (either id pwvPackage ep)
   where
-    go :: (Revdep, HashSet (ParsedDep)) -> HashMap Revdep (HashSet ParsedDep)
-    go (r, s)
-        | any check s = M.singleton r s
-        | otherwise = M.empty
+    check :: DepWithCtx -> Bool
+    check = isDepRelevant mode ep . dwcDepSpec
 
-    check d = case (mode, d) of
-        (Matching, Left cd) -> doesConstraintMatch cd p0
-        (Matching, Right (c,n)) -> c == c0 && n == n0
-        (NonMatching, Left cd) -> not (doesConstraintMatch cd p0)
-        (NonMatching, Right _) -> False
+-- | Check if a 'DepSpec' should be displayed, given the 'MatchMode' and
+--   package (with optional version) from the command line.
+isDepRelevant
+    :: MatchMode
+    -> Either Package PkgWithVer
+    -> DepSpec
+    -> Bool
+isDepRelevant m0 e0 s0 =
+    let b = case (e0, s0) of
+            -- Ignore the DepSpec if it's a blocker
+            (_, VersionedDepSpec (Just _) _ _ _) -> False
+            (_, UnversionedDepSpec (Just _) _ _ _) -> False
+
+            (Left p0, VersionedDepSpec _ vp _ _)
+                -> p0 == vPkgPackage vp
+            (Left p0, UnversionedDepSpec _ p _ _)
+                -> p0 == p
+            (Right (PkgWithVer p0 v0), VersionedDepSpec _ vp _ _)
+                -> matchVersionedPackage vp p0 v0
+            (Right (PkgWithVer p0 _), UnversionedDepSpec _ p _ _)
+                -> p0 == p
+    in case m0 of
+            Matching -> b
+            NonMatching -> not b
 
 -- Types
 
-type ConstraintPkg = (Category, PkgName)
-type Revdep = (Category, PkgName, Version, Slot, Repository)
-type BasicDep = (Category, PkgName)
-type ParsedDep = Either ConstrainedDep BasicDep
+-- | A package and a version, which uniquely identifies an ebuild
+data PkgWithVer = PkgWithVer
+    { pwvPackage :: Package
+    , pwvVersion :: Version
+    }
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass Hashable
 
--- | Organized by @(Category, PkgName)@
+instance Printable PkgWithVer where
+    toString (PkgWithVer p v) = toString p ++ "-" ++ toString v
+
+instance Parsable PkgWithVer st String where
+    parserName = "package with version (no constraint)"
+    parser :: ParserT st String PkgWithVer
+    parser = do
+        p <- parser
+        _ <- $( char '-' )
+        v <- parser
+        pure $ PkgWithVer p v
+
+-- | Organized by @'Package'@ (@(Category, PkgName)@)
 --
---   The inner map is keyed by the reverse dependency and contains a set of
---   constraints that match the same @(Category, PkgName)@ as the outermost key.
-type ConstraintMap = HashMap ConstraintPkg
-    (HashMap Revdep (HashSet ParsedDep))
+--   The inner map is keyed by the @'PkgWithVer'@ and contains a set of
+--   @'DepWithCtx'@ that match the same @Package@ as the outermost key.
+type ConstraintMap = HashMap Package
+    (HashMap PkgWithVer (HashSet DepWithCtx))
 
-insertCM :: Revdep -> ParsedDep -> ConstraintMap -> ConstraintMap
-insertCM revdep dep cmap0 =
-    unionCM cmap0 $
-        M.singleton (ccat,cpkg) (M.singleton revdep (S.singleton dep))
-  where
-    (ccat, cpkg) = case dep of
-        Left (ConstrainedDep _ c p _ _ _) -> (c,p)
-        Right bDep -> bDep
+insertCM
+    :: Package -> PkgWithVer
+    -> DepVar -> DepSpec -> Maybe DepContext
+    -> ConstraintMap -> ConstraintMap
+insertCM pkg pwv dVar dSpec dCtx
+    = unionCM
+    $ M.singleton pkg
+    $ M.singleton pwv
+    $ S.singleton (DepWithCtx dSpec dVar dCtx)
 
 unionCM :: ConstraintMap -> ConstraintMap -> ConstraintMap
 unionCM = M.unionWith (M.unionWith S.union)
 
--- Parsing
+-- | A 'DepSpec' and it's context: the 'DepVar' where it was encountered and
+--   its (optional) relevant 'DepGroup'
+data DepWithCtx = DepWithCtx
+    { dwcDepSpec :: DepSpec
+    , dwcDepVar :: DepVar
+    , dwcDepContext :: Maybe DepContext
+    } deriving (Show, Eq, Ord, Generic, Hashable)
 
-parseAll :: TL.Text -> Either (Maybe String) ConstraintMap
-parseAll t = do
-    cms <- traverse parseLine (TL.lines t)
-    pure $ foldr unionCM M.empty cms
-  where
-    parseLine :: TL.Text -> Either (Maybe String) ConstraintMap
-    parseLine l = do
-        extractResult $ runParser lineParser (encodeLazyText l)
+-- | A relevant context within which a 'DepSpec' was found
+data DepContext
+    = AnyCtx (NonEmpty (Either DepGroup DepSpec))
+    | UseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
+    | NotUseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
+    deriving (Show, Eq, Ord, Generic, Hashable)
 
-lineParser :: Parser String ConstraintMap
-lineParser = do
-    parser @ConstrainedDep >>= \case -- parser from Data.Parsable
-        ConstrainedDep Equal rdCat rdPkg rdVer (Just rdSlot) (Just rdRepo) -> do
-            let revdep = (rdCat, rdPkg, rdVer, rdSlot, rdRepo)
-            cds <- bruteForce
-            pure $ foldr (insertCM revdep) M.empty cds
-        cd -> err $ "Invalid ConstrainedDep: " ++ show cd
-  where
-    -- Start with char 0, see if it's a valid ConstrainedDep /or/ Package.
-    -- Try next char, see if it's a valid ConstrainedDep /or Package.
-    -- etc...
-    bruteForce :: Parser String [ParsedDep]
-    bruteForce = choice
-        [ try $ (:) <$> (Left <$> parser @ConstrainedDep) <*> bruteForce
-        , try $ do
---             Package c n Nothing _ _ <- parser
-            parser >>= \case
-                Package c n Nothing _ _ ->
-                    (Right (c,n) :) <$> bruteForce
-                p -> err $ "Invalid Package: " ++ show p
-        , try $ [] <$ eof
-        , anyChar *> bruteForce
-        ]
+instance Printable DepContext where
+    toString = \case
+        AnyCtx ne -> toString $ OrGroup ne
+        UseCtx ne uf -> toString $ UseGroup ne uf
+        NotUseCtx ne uf -> toString $ NotUseCtx ne uf
 
--- Environment stuff
-
-type Env = AccumT (First FilePath) IO
-
-runEnv :: Env a -> IO a
-runEnv = flip evalAccumT mempty
-
--- | Find the path to the @pquery@ executable or throw an error. Caches the
---   result in the case of a success.
-pqueryPath :: Env FilePath
-pqueryPath = look >>= \case
-    First (Just p) -> pure p
-    First Nothing -> liftIO (findExecutable "pquery") >>= \case
-        Just p -> add (pure p) *> pure p
-        Nothing -> liftIO $
-            die "Could not find pquery executable. Install sys-apps/pkgcore first."
-
--- Util stuff
-
--- | Run a command and capture stdout and stderr
-runOpaque
-    :: FilePath -- ^ executable path
-    -> [String] -- ^ arguments
-       -- | Exit code, stdout, stderr
-    -> IO (ExitCode, TL.Text, TL.Text)
-runOpaque exe args
-    = sourceProcessWithStreams
-        (proc exe args)
-        (pure ())
-        (decodeUtf8LenientC .| sinkLazy)
-        (decodeUtf8LenientC .| sinkLazy)
-
--- | Run a command and dump stdout to @stdout@, stderr to @stderr@, also
---   capturing both streams.
-runTransparent
-    :: FilePath -- ^ executable path
-    -> [String] -- ^ arguments
-       -- | Exit code, stdout, stderr
-    -> IO (ExitCode, TL.Text, TL.Text)
-runTransparent exe args
-    = sourceProcessWithStreams (proc exe args) { delegate_ctlc = True }
-            (pure ()) (transSink stdout) (transSink stderr)
-  where
-    transSink :: Handle -> ConduitT BS.ByteString Void IO TL.Text
-    transSink h = iterMC (BS.hPut h) .| decodeUtf8LenientC .| sinkLazy
+-- | A 'HashMap' from a package/version pair to relevant dependencies and
+--   their context. This is produced by looking up a particular
+--   package + version + mode in the main 'ContextMap'.
+type ResultMap = HashMap PkgWithVer (HashSet DepWithCtx)
 
 -- Command line
 
@@ -289,13 +319,14 @@ instance Semigroup Mode where
 instance Monoid Mode where
     mempty = NormalMode mempty mempty mempty
 
-checkArgs :: IO (NonEmpty Package, MatchMode, Repository, Debug)
+checkArgs :: IO (NonEmpty (Either Package PkgWithVer), MatchMode, Repository, Debug)
 checkArgs = do
     progName <- getProgName
     argv <- getArgs
-    let goErr str = showHelp progName *> die ("error: " ++ str)
 
-    case getOpt Permute options argv of
+    let goErr str = showHelp progName *> die ("error: " ++ str)
+        foo = getOpt Permute options argv
+    case foo of
         (_,_,es@(_:_)) -> goErr (intercalate " " es)
 
         (ms,as,_) -> case (mconcat ms, NE.nonEmpty as) of
@@ -303,16 +334,39 @@ checkArgs = do
             (_, Nothing) -> goErr "At least one full package name (and optional \
                            \version) required"
             (NormalMode (Last mm) (Last mr) d, Just pStrs) ->
-                case traverse (runParsable . encodeString) pStrs of
-                    Left e -> goErr $
-                        "Invalid package: " ++ show e
-                    Right ps -> do
+                case traverse parsePkg pStrs of
+                    Failure ne -> goErr $ unlines $
+                        (\(s,e) -> unwords
+                            [ "Invalid package:", show s, "(", show e, ")" ]
+                        ) <$> NE.toList ne
+                    Success ps -> do
                         m <- case mm of
                             Just mode -> pure mode
                             Nothing -> detectMode ps
                         pure (ps, m, fromMaybe (Repository "haskell") mr, d)
   where
     showHelp progName = putStrLn (usageInfo (header progName) options)
+
+    -- | In the event of an error, returns the original string and the error message(s)
+    parsePkg
+        :: String
+        -> Validation
+            (NonEmpty (String, Maybe String))
+            (Either Package PkgWithVer)
+    parsePkg s =
+        let b = encodeString s
+        in case (runParsable b, runParsable b) of
+                    (Right spec, _) -> case spec of
+                        VersionedDepSpec Nothing (VPkgEq p v) Nothing Nothing
+                            -> pure $ Right $ PkgWithVer p v
+                        UnversionedDepSpec Nothing p Nothing Nothing
+                            -> pure $ Left p
+                        _ -> let e = Just $ "Unsupported atom: " ++ show b
+                             in failure (s,e)
+                    (_, Right pwv) -> pure $ Right pwv
+                    (Left e1, Left e2) ->
+                        let es = NE.fromList [e1, e2]
+                        in Failure $ (s,) <$> es
 
     header progName = unlines $ unwords <$>
         [ ["Usage:", progName, "[OPTION...]", "<cat/pkg[-ver]... >"]
@@ -346,10 +400,10 @@ checkArgs = do
             "Look for non-matching relevant dependencies"
         ]
 
-    detectMode :: Foldable f => f Package -> IO MatchMode
+    detectMode :: Foldable f => f (Either Package PkgWithVer) -> IO MatchMode
     detectMode ps
-        | all (isJust . getVersion) ps = pure NonMatching
-        | all (isNothing . getVersion) ps = pure Matching
+        | all isLeft  ps = pure NonMatching
+        | all isRight ps = pure Matching
         | otherwise = do
             hPutStrLn stderr "Warning: Mix of versioned and non-versioned \
                              \packages were given on the command\n\
@@ -358,6 +412,3 @@ checkArgs = do
 
 encodeString :: String -> BS.ByteString
 encodeString = encodeUtf8 . T.pack
-
-encodeLazyText :: TL.Text -> BS.ByteString
-encodeLazyText = encodeUtf8 . TL.toStrict

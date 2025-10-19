@@ -1,0 +1,30 @@
+packages: .
+
+source-repository-package
+    type: git
+    location: https://github.com/hololeap/cabal-portage.git
+    tag: 425097a7ee1a61696eb053adf25c9cca97665bc4
+    subdir: parsable
+
+source-repository-package
+    type: git
+    location: https://github.com/hololeap/cabal-portage.git
+    tag: 425097a7ee1a61696eb053adf25c9cca97665bc4
+    subdir: parsable-test
+
+source-repository-package
+    type: git
+    location: https://github.com/hololeap/cabal-portage.git
+    tag: 425097a7ee1a61696eb053adf25c9cca97665bc4
+    subdir: portage-hs
+
+source-repository-package
+    type: git
+    location: https://github.com/hololeap/cabal-portage.git
+    tag: 425097a7ee1a61696eb053adf25c9cca97665bc4
+    subdir: gentoo-utils
+
+source-repository-package
+    type: git
+    location: https://github.com/hololeap/conduit-run.git
+    tag: 033fb2aa69bb2a84845d25c005510e50b565bcc5
