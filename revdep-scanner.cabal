@@ -39,7 +39,13 @@ common exe
 executable revdep-scanner
     import:           warnings, exe
     main-is:          Main.hs
-    -- other-modules:
+    other-modules:
+        , RevdepScanner.CmdLine
+        , RevdepScanner.Display
+        , RevdepScanner.Logic
+        , RevdepScanner.Types
+        , RevdepScanner.Types.ConstraintMap
+        , RevdepScanner.Util
     -- other-extensions:
     build-depends:
         , base >=4.16 && <4.22
