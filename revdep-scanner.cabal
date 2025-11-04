@@ -36,29 +36,40 @@ common warnings
 common exe
     ghc-options: -threaded -rtsopts -with-rtsopts=-N
 
-executable revdep-scanner
-    import:           warnings, exe
-    main-is:          Main.hs
-    other-modules:
+library revdep-scanner-internal
+    import:           warnings
+    exposed-modules:
         , RevdepScanner.CmdLine
         , RevdepScanner.Display
         , RevdepScanner.Logic
         , RevdepScanner.Types
         , RevdepScanner.Types.ConstraintMap
         , RevdepScanner.Util
-    -- other-extensions:
     build-depends:
         , base >=4.16 && <4.22
         , parsable >=0.1 && <0.3
         , portage-hs >=0.1 && <0.3
         , gentoo-utils ^>=0.1
         , bytestring >=0.11.4.0 && <0.13
-        , conduit ^>=1.3.0
-        , directory ^>=1.3.6.2
         , hashable ^>=1.4.7.0
-        , pretty-simple ^>=4.1.1.0
         , unordered-containers ^>=0.2
         , text >=1.2.5.0 && <2.2
         , transformers >=0.5.6.2 && <0.7
-    hs-source-dirs:   src-exe, src
+    hs-source-dirs:   src
+
+    default-language: GHC2021
+
+executable revdep-scanner
+    import:           warnings
+    main-is:          Main.hs
+    -- other-extensions:
+    build-depends:
+        , revdep-scanner:revdep-scanner-internal
+        , base >=4.16 && <4.22
+        , portage-hs >=0.1 && <0.3
+        , gentoo-utils ^>=0.1
+        , conduit ^>=1.3.0
+        , pretty-simple ^>=4.1.1.0
+        , unordered-containers ^>=0.2
+    hs-source-dirs:   src-exe
     default-language: GHC2021
