@@ -4,6 +4,7 @@ module RevdepScanner.CmdLine
     , Mode(..)
     , Repository
     , Debug
+    , parsePkg
     ) where
 
 import Data.Either (isLeft, isRight)
@@ -73,27 +74,6 @@ checkArgs = do
   where
     showHelp progName = putStrLn (usageInfo (header progName) options)
 
-    -- | In the event of an error, returns the original string and the error message(s)
-    parsePkg
-        :: String
-        -> Validation
-            (NonEmpty (String, Maybe String))
-            (Either Package PkgWithVer)
-    parsePkg s =
-        let b = encodeString s
-        in case (runParsable b, runParsable b) of
-                    (Right spec, _) -> case spec of
-                        VersionedDepSpec Nothing (VPkgEq p v) Nothing Nothing
-                            -> pure $ Right $ PkgWithVer p v
-                        UnversionedDepSpec Nothing p Nothing Nothing
-                            -> pure $ Left p
-                        _ -> let e = Just $ "Unsupported atom: " ++ show b
-                             in failure (s,e)
-                    (_, Right pwv) -> pure $ Right pwv
-                    (Left e1, Left e2) ->
-                        let es = NE.fromList [e1, e2]
-                        in Failure $ (s,) <$> es
-
     header progName = unlines $ unwords <$>
         [ ["Usage:", progName, "[OPTION...]", "<cat/pkg[-ver]... >"]
         , []
@@ -135,3 +115,32 @@ checkArgs = do
                              \packages were given on the command\n\
                              \line. Defaulting to \"non-matching mode\"."
             pure NonMatching
+
+-- | Parse a package (with or without version from the command line). This
+--   can be any of these valid inputs:
+--
+--   * 'Package' (@category/package@)
+--   * 'PkgWithVer' (@category/package-ver@)
+--   * 'VPkgEq' (@=category/package-ver@)
+--
+--   Any other input will create an error which will be accumulated in the
+--   'Validation'.
+parsePkg
+    :: String
+    -> Validation
+        (NonEmpty (String, Maybe String))
+        (Either Package PkgWithVer)
+parsePkg s =
+    let b = encodeString s
+    in case (runParsable b, runParsable b) of
+        (Right pwv, _) -> pure $ Right pwv
+        (_, Right spec) -> case spec of
+            VersionedDepSpec Nothing (VPkgEq p v) Nothing Nothing
+                -> pure $ Right $ PkgWithVer p v
+            UnversionedDepSpec Nothing p Nothing Nothing
+                -> pure $ Left p
+            _ -> let e = Just $ "Unsupported atom: " ++ show b
+                    in failure (s,e)
+        (Left e1, Left e2) ->
+            let es = NE.fromList [e1, e2]
+            in Failure $ (s,) <$> es
