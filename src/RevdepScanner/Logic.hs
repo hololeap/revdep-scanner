@@ -1,15 +1,18 @@
+{-# Language DataKinds #-}
+{-# Language LambdaCase #-}
+{-# Language TypeFamilies #-}
+
 module RevdepScanner.Logic
     ( lookupResults
-    , isDepRelevant
     ) where
 
-import qualified Data.HashMap.Strict as M
-import qualified Data.Map.NonEmpty as NEM
+import qualified Data.HashMap.Strict as HM
 
 import Distribution.Portage.Types
 
-import RevdepScanner.CmdLine
 import RevdepScanner.Types
+import RevdepScanner.Types.DepSet
+import RevdepScanner.Types.ResultMap
 import RevdepScanner.Types.ConstraintMap (ConstraintMap)
 
 -- | Given the 'MatchMode' and a package given on the command line (either
@@ -25,37 +28,29 @@ import RevdepScanner.Types.ConstraintMap (ConstraintMap)
 --          )
 --   @
 lookupResults
-    :: MatchMode
-    -> Either Package PkgWithVer
+    :: forall m.
+        ( Monoid (MatchLogic DepSet' ('Just m))
+        , Monoid (MatchLogic DepOrGroup' ('Just m))
+        , Ord (MatchLogic DepSet' ('Just m))
+        , Ord (MatchLogic DepOrGroup' ('Just m))
+        )
+    => LiftedMatchMode m
+    -> CmdlinePkg
     -> ConstraintMap
-    -> ResultMap
-lookupResults mode ep =
-    foldMap (NEM.filter (any check)) . M.lookup (either id pwvPackage ep)
+    -> EvaluatedResultMap m
+lookupResults mode cp
+    = foldMap (evalResultMap mode isSpecRelevant)
+    . HM.lookup (cmdlinePkgPackage cp)
   where
-    check :: DepWithCtx -> Bool
-    check = isDepRelevant mode ep . dwcDepSpec
 
--- | Check if a 'DepSpec' should be displayed, given the 'MatchMode' and
---   package (with optional version) from the command line.
-isDepRelevant
-    :: MatchMode
-    -> Either Package PkgWithVer
-    -> DepSpec
-    -> Bool
-isDepRelevant m0 e0 s0 =
-    let b = case (e0, s0) of
-            -- Ignore the DepSpec if it's a blocker
-            (_, VersionedDepSpec (Just _) _ _ _) -> False
-            (_, UnversionedDepSpec (Just _) _ _ _) -> False
+    isSpecRelevant :: DepSpec -> Bool
+    isSpecRelevant s =
+        let b = case (cp, s) of
+                (CmdlinePkgWithVer (PkgWithVer p v), VersionedDepSpec _ vp _ _)
+                    -> matchVersionedPackage vp p v
+                _ -> True
 
-            (Left p0, VersionedDepSpec _ vp _ _)
-                -> p0 == vPkgPackage vp
-            (Left p0, UnversionedDepSpec _ p _ _)
-                -> p0 == p
-            (Right (PkgWithVer p0 v0), VersionedDepSpec _ vp _ _)
-                -> matchVersionedPackage vp p0 v0
-            (Right (PkgWithVer p0 _), UnversionedDepSpec _ p _ _)
-                -> p0 == p
-    in case m0 of
-            Matching -> b
-            NonMatching -> not b
+        -- NonMatching mode inverts the logic
+        in case mode of
+            LMatching -> b
+            LNonMatching -> not b

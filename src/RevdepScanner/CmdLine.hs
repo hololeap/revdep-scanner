@@ -7,7 +7,6 @@ module RevdepScanner.CmdLine
     , parsePkg
     ) where
 
-import Data.Either (isLeft, isRight)
 import Data.List as L
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty(..))
@@ -27,11 +26,6 @@ import RevdepScanner.Util (encodeString)
 
 type Debug = Any
 
-data MatchMode
-    = Matching
-    | NonMatching
-    deriving (Show, Eq, Ord)
-
 data Mode
     = HelpMode
     | NormalMode (Last MatchMode) (Last Repository) Debug
@@ -46,7 +40,7 @@ instance Semigroup Mode where
 instance Monoid Mode where
     mempty = NormalMode mempty mempty mempty
 
-checkArgs :: IO (NonEmpty (Either Package PkgWithVer), MatchMode, Repository, Debug)
+checkArgs :: IO (NonEmpty CmdlinePkg, MatchMode, Repository, Debug)
 checkArgs = do
     progName <- getProgName
     argv <- getArgs
@@ -106,15 +100,23 @@ checkArgs = do
             "Look for non-matching relevant dependencies"
         ]
 
-    detectMode :: Foldable f => f (Either Package PkgWithVer) -> IO MatchMode
+    detectMode :: Foldable f => f CmdlinePkg -> IO MatchMode
     detectMode ps
-        | all isLeft  ps = pure NonMatching
-        | all isRight ps = pure Matching
+        | all isPkg ps = pure Matching
+        | all isPwv ps = pure NonMatching
         | otherwise = do
             hPutStrLn stderr "Warning: Mix of versioned and non-versioned \
                              \packages were given on the command\n\
                              \line. Defaulting to \"non-matching mode\"."
             pure NonMatching
+      where
+        isPkg :: CmdlinePkg -> Bool
+        isPkg (CmdlinePackage _) = True
+        isPkg _ = False
+
+        isPwv :: CmdlinePkg -> Bool
+        isPwv (CmdlinePkgWithVer _) = True
+        isPwv _ = False
 
 -- | Parse a package (with or without version from the command line). This
 --   can be any of these valid inputs:
@@ -129,18 +131,8 @@ parsePkg
     :: String
     -> Validation
         (NonEmpty (String, Maybe String))
-        (Either Package PkgWithVer)
+        CmdlinePkg
 parsePkg s =
-    let b = encodeString s
-    in case (runParsable b, runParsable b) of
-        (Right pwv, _) -> pure $ Right pwv
-        (_, Right spec) -> case spec of
-            VersionedDepSpec Nothing (VPkgEq p v) Nothing Nothing
-                -> pure $ Right $ PkgWithVer p v
-            UnversionedDepSpec Nothing p Nothing Nothing
-                -> pure $ Left p
-            _ -> let e = Just $ "Unsupported atom: " ++ show b
-                    in failure (s,e)
-        (Left e1, Left e2) ->
-            let es = NE.fromList [e1, e2]
-            in Failure $ (s,) <$> es
+    case runParsable (encodeString s) of
+        Right p -> pure p
+        Left e -> Failure $ NE.singleton (s,e)

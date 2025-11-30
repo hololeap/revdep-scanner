@@ -1,3 +1,4 @@
+{-# Language DataKinds #-}
 {-# Language DeriveAnyClass #-}
 {-# Language DerivingVia #-}
 {-# Language LambdaCase #-}
@@ -6,18 +7,19 @@
 
 module RevdepScanner.Types
     ( PkgWithVer(..)
-    , DepWithCtx(..)
+    , CmdlinePkg(..)
+    , cmdlinePkgPackage
+    , MatchMode(..)
+    , LiftedMatchMode(..)
     , DepContext(..)
-    , ResultMap
     ) where
 
-import Data.List.NonEmpty (NonEmpty(..))
 import Data.Hashable
-import Data.Map.Strict (Map)
-import Data.Set.NonEmpty (NESet)
+import Data.Kind
+import Data.List.NonEmpty (NonEmpty(..))
 import GHC.Generics
 
-import Data.Parsable hiding ((<|>))
+import Data.Parsable
 import Distribution.Portage.Types
 import Distribution.Portage.Types.Orphans ()
 
@@ -41,13 +43,45 @@ instance Parsable PkgWithVer st String where
         v <- parser
         pure $ PkgWithVer p v
 
--- | A 'DepSpec' and it's context: the 'DepVar' where it was encountered and
---   its (optional) relevant 'DepContext'
-data DepWithCtx = DepWithCtx
-    { dwcDepSpec :: DepSpec
-    , dwcDepVar :: DepVar
-    , dwcDepContext :: Maybe DepContext
-    } deriving (Show, Eq, Ord, Generic, Hashable)
+-- | The user-supplied package (with optional version), given on the command-line
+data CmdlinePkg
+    = CmdlinePackage Package
+    | CmdlinePkgWithVer PkgWithVer
+    deriving (Show, Eq, Ord, Generic, Hashable)
+
+instance Printable CmdlinePkg where
+    toString (CmdlinePackage p) = toString p
+    toString (CmdlinePkgWithVer pwv) = toString pwv
+
+instance Parsable CmdlinePkg st String where
+    parserName = "command-line given package with optional version"
+    parser :: ParserT st String CmdlinePkg
+    parser
+        =   try eqParser
+        <|> try (CmdlinePkgWithVer <$> parser)
+        <|> (CmdlinePackage <$> parser)
+      where
+        -- | Allow for using @=app-misc/foo-0.1@ style
+        eqParser :: ParserT st String CmdlinePkg
+        eqParser = parser >>= \case
+            VPkgEq p v -> pure $ CmdlinePkgWithVer (PkgWithVer p v)
+            _ -> err "unsupported atom"
+
+cmdlinePkgPackage :: CmdlinePkg -> Package
+cmdlinePkgPackage = \case
+    CmdlinePackage p -> p
+    CmdlinePkgWithVer (PkgWithVer p _) -> p
+
+-- | Controls the logic of the program
+data MatchMode
+    = Matching
+    | NonMatching
+    deriving (Show, Eq, Ord)
+
+-- | Lifts into a type-level match mode from a data-level representation
+data LiftedMatchMode :: MatchMode -> Type where
+    LMatching :: LiftedMatchMode 'Matching
+    LNonMatching :: LiftedMatchMode 'NonMatching
 
 -- | A relevant context within which a 'DepSpec' was found.
 --
@@ -78,8 +112,3 @@ instance Printable DepContext where
         OrCtx ne -> toString $ OrGroup ne
         UseCtx ne uf -> toString $ UseGroup ne uf
         NotUseCtx ne uf -> toString $ NotUseGroup ne uf
-
--- | A 'HashMap' from a package/version pair to relevant dependencies and
---   their context. This is produced by looking up a particular
---   package + version + mode in the main 'ContextMap'.
-type ResultMap = Map PkgWithVer (NESet DepWithCtx)

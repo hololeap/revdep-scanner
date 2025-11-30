@@ -1,11 +1,18 @@
+{-# Language TypeFamilies #-}
+
 module Main (main) where
 
 import Conduit
 import Control.Monad
+import Control.Monad.Reader
+import Control.Monad.State
 import Data.List as L
-import qualified Data.List.NonEmpty as NE
 import qualified Data.HashMap.Strict as M
 import Data.Monoid
+import qualified ListT
+import Prettyprinter
+import Prettyprinter.Render.Terminal
+import System.IO (stdout)
 
 import Text.Pretty.Simple (pPrintForceColor)
 
@@ -19,6 +26,7 @@ import RevdepScanner.Logic
 import RevdepScanner.Types
 import           RevdepScanner.Types.ConstraintMap (ConstraintMap)
 import qualified RevdepScanner.Types.ConstraintMap as CM
+import RevdepScanner.Types.DepSet
 
 main :: IO ()
 main = do
@@ -28,22 +36,30 @@ main = do
         when d $ liftIO $ print $ unwords $ "pquery" : args repo
         getPqueryDump ["--repo", unwrapRepository repo] CM.buildCMap
 
-    case vDeps of
+    liftMatchMode mode $ \(lmode :: LiftedMatchMode mode) -> case vDeps of
         Failure es -> error $ "Parsing failure: " ++ show es
         Success deps -> do
             let (m :: ConstraintMap) = foldl' CM.union M.empty deps
 
             when d $ pPrintForceColor deps
 
-            let ls = ps >>= \ep -> do
-                    let p = case ep of
-                            Left p' -> p'
-                            Right (PkgWithVer p' _) -> p'
-                        r = lookupResults mode ep m
-                    case mode of
-                        Matching -> prettyMatches p r
-                        NonMatching -> prettyProblems p r
-            putStr $ unlines $ NE.toList ls
+            let (docs, resMap)
+                    = flip runState mempty
+                    $ flip runReaderT lmode
+                    $ ListT.toList
+                    $ do
+                        cp <- ListT.fromFoldable ps
+                        let p = cmdlinePkgPackage cp
+                            r = lookupResults lmode cp m
+                        put r
+                        case lmode of
+                            LMatching -> prettyMatches p r
+                            LNonMatching -> prettyProblems p r
+
+            when d $ pPrintForceColor resMap
+
+            renderIO stdout $ layoutPretty defaultLayoutOptions $ vsep docs
+            putStrLn ""
   where
     args (Repository n) =
         [ "--all"
