@@ -11,10 +11,10 @@ module RevdepScanner.Types
     , ResultMap
     ) where
 
-import Data.HashMap.Strict (HashMap)
-import Data.HashSet (HashSet)
 import Data.List.NonEmpty (NonEmpty(..))
 import Data.Hashable
+import Data.Map.Strict (Map)
+import Data.Set.NonEmpty (NESet)
 import GHC.Generics
 
 import Data.Parsable hiding ((<|>))
@@ -82,4 +82,4 @@ instance Printable DepContext where
 -- | A 'HashMap' from a package/version pair to relevant dependencies and
 --   their context. This is produced by looking up a particular
 --   package + version + mode in the main 'ContextMap'.
-type ResultMap = HashMap PkgWithVer (HashSet DepWithCtx)
+type ResultMap = Map PkgWithVer (NESet DepWithCtx)

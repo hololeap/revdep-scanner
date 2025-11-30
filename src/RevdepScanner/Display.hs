@@ -6,12 +6,12 @@ module RevdepScanner.Display
     , prettyResults
     ) where
 
+import Data.Foldable (toList)
 import Data.Function (on)
-import qualified Data.HashMap.Strict as M
-import qualified Data.HashSet as S
 import Data.List as L
 import qualified Data.List.NonEmpty as NE
 import           Data.List.NonEmpty (NonEmpty(..))
+import qualified Data.Map.Strict as M
 
 import Data.Parsable hiding ((<|>))
 import Distribution.Portage.Types
@@ -23,7 +23,7 @@ prettyProblems
     -> ResultMap
     -> NonEmpty String
 prettyProblems p m
-    | M.null m = NE.singleton
+    | null m = NE.singleton
         $ toString p ++ ": No problematic packages found!"
     | otherwise
         = (toString p ++ ":")
@@ -34,7 +34,7 @@ prettyMatches
     -> ResultMap
     -> NonEmpty String
 prettyMatches p m
-    | M.null m = NE.singleton
+    | null m = NE.singleton
         $ toString p ++ ": No matches found!"
     | otherwise
         = (toString p ++ ":")
@@ -44,7 +44,7 @@ prettyResults :: ResultMap -> [String]
 prettyResults m =
     sortBy (compare `on` fst) (M.toList m) >>= \((PkgWithVer p v),s) ->
         let p' = VPkgEq p v
-            svs = sortBy cmp (S.toList s)
+            svs = sortBy cmp (toList s)
         in  [ "    " ++ toString p'
             , "        ( " ++ L.intercalate " " (map toStr svs) ++ " )"
             ]

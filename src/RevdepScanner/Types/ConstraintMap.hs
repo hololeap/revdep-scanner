@@ -9,11 +9,13 @@ module RevdepScanner.Types.ConstraintMap
 
 import Control.Monad
 import Control.Monad.Trans.Accum
-import qualified Data.HashSet as S
-import           Data.HashSet (HashSet)
 import qualified Data.HashMap.Strict as M
 import           Data.HashMap.Strict (HashMap)
+import qualified Data.Map.NonEmpty as NEM
+import           Data.Map.NonEmpty (NEMap)
 import Data.Monoid
+import qualified Data.Set.NonEmpty as NES
+import           Data.Set.NonEmpty (NESet)
 
 import Distribution.Portage.Types
 import Distribution.Gentoo.Utils.Pquery
@@ -25,7 +27,7 @@ import RevdepScanner.Types
 --   The inner map is keyed by the @'PkgWithVer'@ and contains a set of
 --   @'DepWithCtx'@ that match the same @Package@ as the outermost key.
 type ConstraintMap = HashMap Package
-    (HashMap PkgWithVer (HashSet DepWithCtx))
+    (NEMap PkgWithVer (NESet DepWithCtx))
 
 insert
     :: Package -> PkgWithVer
@@ -34,11 +36,11 @@ insert
 insert pkg pwv dVar dSpec dCtx
     = union
     $ M.singleton pkg
-    $ M.singleton pwv
-    $ S.singleton (DepWithCtx dSpec dVar dCtx)
+    $ NEM.singleton pwv
+    $ NES.singleton (DepWithCtx dSpec dVar dCtx)
 
 union :: ConstraintMap -> ConstraintMap -> ConstraintMap
-union = M.unionWith (M.unionWith S.union)
+union = M.unionWith (NEM.unionWith NES.union)
 
 -- | Build a 'ConstraintMap' by scanning the contents of a 'PkgDeps' entry
 buildCMap :: PkgDeps -> ConstraintMap
@@ -86,7 +88,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
         :: ConstraintMap
         -> Either DepGroup DepSpec
         -> ReaderT DepVar (Accum (First DepContext)) ConstraintMap
-    groupFold m g = M.unionWith (M.unionWith S.union) m <$> fromGroup g
+    groupFold m g = M.unionWith (NEM.unionWith NES.union) m <$> fromGroup g
 
     foldMapA :: (Applicative f, Foldable t, Monoid b) => (a -> f b) -> t a -> f b
     foldMapA f = getAp . foldMap (Ap . f)

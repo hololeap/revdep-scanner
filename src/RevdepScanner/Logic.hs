@@ -4,6 +4,7 @@ module RevdepScanner.Logic
     ) where
 
 import qualified Data.HashMap.Strict as M
+import qualified Data.Map.NonEmpty as NEM
 
 import Distribution.Portage.Types
 
@@ -29,7 +30,7 @@ lookupResults
     -> ConstraintMap
     -> ResultMap
 lookupResults mode ep =
-    foldMap (M.filter (any check)) . M.lookup (either id pwvPackage ep)
+    foldMap (NEM.filter (any check)) . M.lookup (either id pwvPackage ep)
   where
     check :: DepWithCtx -> Bool
     check = isDepRelevant mode ep . dwcDepSpec
