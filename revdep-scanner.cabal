@@ -85,3 +85,23 @@ executable revdep-scanner
         , unordered-containers ^>=0.2
     hs-source-dirs:   src-exe
     default-language: GHC2021
+
+test-suite revdep-scanner-test
+    import:           warnings, exe
+    default-language: GHC2021
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          TestMain.hs
+    other-modules:
+        , RevdepScanner.Test.UnitTests
+    build-depends:
+        , revdep-scanner:revdep-scanner-internal
+        , base >=4.16 && <4.22
+        , gentoo-utils ^>=0.1
+        , parsable >=0.1 && <0.2
+        , portage-hs >=0.1 && <0.3
+--         , containers >=0.6 && <0.8
+        , tasty <1.5
+        , tasty-hunit <0.11
+        , unordered-containers ^>=0.2
+        , validation-selective ^>=0.2
