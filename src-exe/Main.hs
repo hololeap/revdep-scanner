@@ -4,8 +4,6 @@ module Main (main) where
 
 import Conduit
 import Control.Monad
-import Control.Monad.Reader
-import Control.Monad.State
 import Data.List as L
 import qualified Data.HashMap.Strict as M
 import Data.Monoid
@@ -26,7 +24,7 @@ import RevdepScanner.Logic
 import RevdepScanner.Types
 import           RevdepScanner.Types.ConstraintMap (ConstraintMap)
 import qualified RevdepScanner.Types.ConstraintMap as CM
-import RevdepScanner.Types.DepSet
+import RevdepScanner.Types.DepMap
 
 main :: IO ()
 main = do
@@ -43,20 +41,14 @@ main = do
 
             when d $ pPrintForceColor deps
 
-            let (docs, resMap)
-                    = flip runState mempty
-                    $ flip runReaderT lmode
-                    $ ListT.toList
-                    $ do
-                        cp <- ListT.fromFoldable ps
-                        let p = cmdlinePkgPackage cp
-                            r = lookupResults lmode cp m
-                        put r
-                        case lmode of
-                            LMatching -> prettyMatches p r
-                            LNonMatching -> prettyProblems p r
-
-            when d $ pPrintForceColor resMap
+            docs <- ListT.toList $ do
+                cp <- ListT.fromFoldable ps
+                let p = cmdlinePkgPackage cp
+                    r = lookupResults lmode cp m
+                when d $ pPrintForceColor r
+                pure $ case lmode of
+                    LMatching -> prettyMatches p r
+                    LNonMatching -> prettyProblems p r
 
             renderIO stdout $ layoutPretty defaultLayoutOptions $ vsep docs
             putStrLn ""

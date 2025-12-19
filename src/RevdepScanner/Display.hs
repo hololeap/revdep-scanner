@@ -8,17 +8,13 @@ module RevdepScanner.Display
     , prettyMatches
     ) where
 
-import Control.Monad.Reader
-import Data.Bifunctor (first)
 import qualified Data.List.NonEmpty as NEL
 import           Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.Map.NonEmpty as NEM
+import           Data.Map.NonEmpty (NEMap)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import           Data.Set (Set)
-import qualified Data.Set.NonEmpty as NES
-import qualified ListT
-import           ListT (cons)
 import Prettyprinter
 import Prettyprinter.Render.Terminal
 
@@ -26,105 +22,91 @@ import Data.Parsable hiding ((<|>))
 import Distribution.Portage.Types
 
 import RevdepScanner.Types
-import RevdepScanner.Types.DepSet
+import qualified RevdepScanner.Types.ContextMap as CtxMap
+import           RevdepScanner.Types.ContextMap (ContextMap)
+import RevdepScanner.Types.DepMap
 import RevdepScanner.Types.ResultMap
 
 prettyProblems
-    :: MonadReader (LiftedMatchMode mode) m
+    :: forall mode. AllDepMaps mode '[ IsBool ]
     => Package
     -> EvaluatedResultMap mode
-    -> m (Doc AnsiStyle)
+    -> Doc AnsiStyle
 prettyProblems p m
-    | null m = pure
-        $ toDoc p <> colon <> space <> pretty "No problematic packages found!"
-    | otherwise = do
-        r <- prettyResults m
-        pure $ annotate (color Magenta) (toDoc p <> colon)
+    | null m
+        = toDoc p <> colon <> space <> pretty "No problematic packages found!"
+    | otherwise
+        = annotate (color Magenta) (toDoc p <> colon)
             <> line
-            <> indent 4 r
+            <> indent 4 (prettyResults m)
 
 prettyMatches
-    :: MonadReader (LiftedMatchMode mode) m
+    :: forall mode. AllDepMaps mode '[ IsBool ]
     => Package
     -> EvaluatedResultMap mode
-    -> m (Doc AnsiStyle)
+    -> Doc AnsiStyle
 prettyMatches p m
-    | null m = pure
-        $ toDoc p <> colon <> space <> pretty "No matches found!"
-    | otherwise = do
-        r <- prettyResults m
-        pure $ annotate (color Magenta) (toDoc p <> colon)
+    | null m
+        = toDoc p <> colon <> space <> pretty "No matches found!"
+    | otherwise
+        = annotate (color Magenta) (toDoc p <> colon)
             <> line
-            <> indent 4 r
+            <> indent 4 (prettyResults m)
 
 prettyResults
-    :: MonadReader (LiftedMatchMode mode) m
-    => EvaluatedResultMap mode
-    -> m (Doc AnsiStyle)
-prettyResults
-    = fmap vsep
-    . ListT.toList
-    . (go <=< ListT.fromFoldable . M.toList)
+    :: forall m. AllDepMaps m '[ IsBool ]
+    => EvaluatedResultMap m
+    -> Doc AnsiStyle
+prettyResults = vsep . (go <=< M.toList)
   where
+    go :: (PkgWithVer, NEMap DepVar (ContextMap ('Just m)))
+        -> [Doc AnsiStyle]
     go (pwv, m0) =
-        fmap (annotate (color Cyan)) $ toDoc pwv `cons` do
-            (dv, m1) <- ListT.fromFoldable $ NEM.toList m0
-            fmap (annotate (color Green) . indent 4) $ toDoc dv `cons` do
-                (mdc, ds) <- ListT.fromFoldable $ NEM.toList m1
-                fmap (annotate (color Blue) . indent 4) $ lift $ case mdc of
-                    Just ctx -> prettyContext ds ctx
-                    Nothing -> case ds of
-                        Left s -> highlightSet highlightStyle s
-                        Right s -> highlightSet highlightStyle s
+        fmap (annotate (color Cyan)) $ toDoc pwv : do
+            (dv, cm) <- NEL.toList $ NEM.toList m0
+            fmap (annotate (color Green) . indent 4) $ toDoc dv : do
+                CtxMap.toList cm >>= pure . annotate (color Blue) . indent 4 . \case
+                    Left (Just ctx, nm) ->
+                        prettyContext $ Left (ctx, nm)
+                    Left (Nothing, nm) ->
+                        highlightDepMap highlightStyle nm
+                    Right (ctx, om) ->
+                        prettyContext $ Right (ctx, om)
 
--- | Pretty print a 'DepContext', highlighting any 'DepSpec's that are in
---   the given dependency set and tagged with @True@.
+-- | Pretty print a 'DepContext' or 'OrContext', highlighting any 'DepSpec's
+--   that are in the given evaluated dependency set.
 prettyContext
-    :: forall mode m. MonadReader (LiftedMatchMode mode) m
-    => Either (DepOrGroup' ('Just mode)) (DepSet' ('Just mode))
-    -> DepContext
-    -> m (Doc AnsiStyle)
-prettyContext ds dc = case (dc, ds) of
-    (OrCtx ne, Left s) -> do
-        hSet <- toHSet s
-        pure $ highlightGroup hSet highlightStyle (OrGroup ne)
-    (OrCtx _, Right _) -> error $ "OrCtx should not match (Right DepSet)"
-    (UseCtx _ _, Left _) -> error $ "UseCtx should not match (Left DepOrGroup)"
-    (NotUseCtx _ _, Left _) -> error $ "NotUseCtx should not match (Left DepOrGroup)"
-    (UseCtx ne uf, Right s) -> do
-        hSet <- toHSet s
-        pure $ highlightGroup hSet highlightStyle (UseGroup ne uf)
-    (NotUseCtx ne uf, Right s) -> do
-        hSet <- toHSet s
-        pure $ highlightGroup hSet highlightStyle (NotUseGroup ne uf)
+    :: forall mode. AllDepMaps mode '[ IsBool ]
+    => Either
+            (DepContext, DepMap ('Just mode))
+            (OrContext, OrGroupMap ('Just mode))
+    -> Doc AnsiStyle
+prettyContext = \case
+    Left (UseCtx ne uf, m) ->
+        highlightGroup (toHSet m) highlightStyle (UseGroup ne uf)
+    Left (NotUseCtx ne uf, m) ->
+        highlightGroup (toHSet m) highlightStyle (NotUseGroup ne uf)
+    Right (OrCtx ne, m) ->
+        highlightGroup (toHSet m) highlightStyle (OrGroup ne)
   where
     toHSet
-        :: forall t. IsDepSet t
+        :: forall t. (IsDepMap t, IsBool (MatchLogic t ('Just mode)))
         => t ('Just mode)
-        -> m (Set DepSpec)
-    toHSet s
-        = (ask >>=)
-        $ \mode -> pure
-        $ S.map snd
-        $ NES.filter fst
-        $ NES.map (first (lowerBool @t mode)) (unwrapDepSet s)
+        -> Set DepSpec
+    toHSet = S.fromList . NEL.toList . NEM.keys . unwrapDepMap
 
--- | Pretty print a dependency set, highlighting any that have been tagged
---   with @True@.
-highlightSet
-    :: forall t mode m. (MonadReader (LiftedMatchMode mode) m, IsDepSet t)
+-- | Pretty print an evaluated dependency set, highlighting all elements.
+highlightDepMap
+    :: forall t mode. IsDepMap t
     => AnsiStyle
     -> t ('Just mode)
-    -> m (Doc AnsiStyle)
-highlightSet style set = ask >>= \mode ->
-    let s = NES.map (first (lowerBool @t mode)) (unwrapDepSet set)
-    in pure $ encloseSep
-        (lparen <> space)
-        (space <> rparen)
-        space
-        $ let f (b, spec) =
-                if b then annotate style (toDoc spec) else toDoc spec
-          in f <$> NEL.toList (NES.toList s)
+    -> Doc AnsiStyle
+highlightDepMap style
+    = encloseSep (lparen <> space) (space <> rparen) space
+    . fmap (annotate style . toDoc)
+    . NEL.toList
+    . NEM.keys
+    . unwrapDepMap
 
 -- | Pretty print a 'DepGroup', highlighting any 'DepSpec' that is in the
 --   given @'Set' 'DepSpec'@.

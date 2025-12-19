@@ -4,6 +4,7 @@
 
 module RevdepScanner.Logic
     ( lookupResults
+    , isSpecRelevant
     ) where
 
 import qualified Data.HashMap.Strict as HM
@@ -11,7 +12,7 @@ import qualified Data.HashMap.Strict as HM
 import Distribution.Portage.Types
 
 import RevdepScanner.Types
-import RevdepScanner.Types.DepSet
+import RevdepScanner.Types.DepMap
 import RevdepScanner.Types.ResultMap
 import RevdepScanner.Types.ConstraintMap (ConstraintMap)
 
@@ -28,29 +29,31 @@ import RevdepScanner.Types.ConstraintMap (ConstraintMap)
 --          )
 --   @
 lookupResults
-    :: forall m.
-        ( Monoid (MatchLogic DepSet' ('Just m))
-        , Monoid (MatchLogic DepOrGroup' ('Just m))
-        , Ord (MatchLogic DepSet' ('Just m))
-        , Ord (MatchLogic DepOrGroup' ('Just m))
-        )
+    :: forall m. AllDepMaps m '[ IsBool ]
     => LiftedMatchMode m
     -> CmdlinePkg
     -> ConstraintMap
     -> EvaluatedResultMap m
 lookupResults mode cp
-    = foldMap (evalResultMap mode isSpecRelevant)
+    = foldMap (evalResultMap (isSpecRelevant mode cp))
     . HM.lookup (cmdlinePkgPackage cp)
   where
 
-    isSpecRelevant :: DepSpec -> Bool
-    isSpecRelevant s =
-        let b = case (cp, s) of
-                (CmdlinePkgWithVer (PkgWithVer p v), VersionedDepSpec _ vp _ _)
-                    -> matchVersionedPackage vp p v
-                _ -> True
-
-        -- NonMatching mode inverts the logic
-        in case mode of
-            LMatching -> b
-            LNonMatching -> not b
+isSpecRelevant
+    :: LiftedMatchMode m
+    -> CmdlinePkg
+    -> DepSpec
+    -> Bool
+isSpecRelevant mode cp s = case (mode, cp, s) of
+    (LNonMatching, CmdlinePkgWithVer (PkgWithVer p v), VersionedDepSpec _ vp _ _)
+        -> p == (vPkgPackage vp) && not (matchVersionedPackage vp p v)
+    -- Non-matching mode really only makes sense for CmdlinePkgWithVer/VersionedDepSpec
+    (LNonMatching, _, _) -> False
+    (_, CmdlinePkgWithVer (PkgWithVer p v), VersionedDepSpec _ vp _ _)
+        -> matchVersionedPackage vp p v
+    (_, CmdlinePkgWithVer (PkgWithVer p _), UnversionedDepSpec _ p' _ _)
+        -> p == p'
+    (_, CmdlinePackage p, VersionedDepSpec _ vp _ _)
+        -> p == vPkgPackage vp
+    (_, CmdlinePackage p, UnversionedDepSpec _ p' _ _)
+        -> p == p'

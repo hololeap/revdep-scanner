@@ -16,18 +16,17 @@ import qualified Data.HashMap.Strict as HM
 import           Data.HashMap.Strict (HashMap)
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
 import qualified Data.Map.Strict as M
 import           Data.Map.Strict (Map)
 import Data.Monoid
-import qualified Data.Set.NonEmpty as NES
-import           Data.Set.NonEmpty (NESet)
 
 import Distribution.Portage.Types
 import Distribution.Gentoo.Utils.Pquery
 
 import RevdepScanner.Types
-import RevdepScanner.Types.DepSet
+import qualified RevdepScanner.Types.ContextMap as CtxMap
+import           RevdepScanner.Types.ContextMap (ContextMap)
+import RevdepScanner.Types.DepMap
 import RevdepScanner.Types.ResultMap
 
 -- | Organized by @'Package'@ (@(Category, PkgName)@)
@@ -37,32 +36,36 @@ import RevdepScanner.Types.ResultMap
 type ConstraintMap = HashMap Package UnevaluatedResultMap
 
 insert
-    :: Package -> PkgWithVer
-    -> DepVar -> Maybe DepContext -> (Either DepOrGroup DepSet)
-    -> ConstraintMap -> ConstraintMap
-insert pkg pwv dVar dCtx depSet
-    = (singleton pkg pwv dVar dCtx depSet `union`)
+    :: Package
+    -> PkgWithVer
+    -> DepVar
+    -> Either
+            (Maybe DepContext, DepSpec)
+            (OrContext, DepSpec)
+    -> ConstraintMap
+    -> ConstraintMap
+insert pkg pwv dVar ctx
+    = (singleton pkg pwv dVar ctx `union`)
 
 union :: ConstraintMap -> ConstraintMap -> ConstraintMap
-union
-    = HM.unionWith
-    $ NEM.unionWith
-    $ NEM.unionWith
-    $ NEM.unionWith (<>)
+union = HM.unionWith unionUnevaluatedResultMaps
 
 unions :: [ConstraintMap] -> ConstraintMap
 unions = foldl' union HM.empty
 
 singleton
-    :: Package -> PkgWithVer
-    -> DepVar -> Maybe DepContext -> (Either DepOrGroup DepSet)
+    :: Package
+    -> PkgWithVer
+    -> DepVar
+    -> Either
+            (Maybe DepContext, DepSpec)
+            (OrContext, DepSpec)
     -> ConstraintMap
-singleton pkg pwv dVar mCtx depSet
+singleton pkg pwv dVar ctx
     = HM.singleton pkg
     $ NEM.singleton pwv
     $ NEM.singleton dVar
-    $ NEM.singleton mCtx
-    $ depSet
+    $ CtxMap.singleton ctx
 
 -- | Build a 'ConstraintMap' by scanning the contents of a 'PkgDeps' entry
 buildCMap :: PkgDeps -> ConstraintMap
@@ -81,7 +84,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
   where
     fromGroup
         :: Either DepGroup DepSpec
-        -> Accum (First DepContext) (Maybe DepVarMap)
+        -> Accum (First (Either DepContext OrContext)) (Maybe DepVarMap)
     fromGroup = \case
         Left g -> do
             case g of
@@ -90,13 +93,13 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
                 -- The other groups are more complex and should be saved as
                 -- context for the output
                 OrGroup ne -> do
-                    add $ pure $ OrCtx ne
+                    add $ pure $ Right $ OrCtx ne
                     foldMapA fromGroup ne
                 UseGroup ne u -> do
-                    add $ pure $ UseCtx ne u
+                    add $ pure $ Left $ UseCtx ne u
                     foldMapA fromGroup ne
                 NotUseGroup ne u -> do
-                    add $ pure $ NotUseCtx ne u
+                    add $ pure $ Left $ NotUseCtx ne u
                     foldMapA fromGroup ne
         Right s
             | isBlocker s -> pure Nothing -- Skip blockers
@@ -107,10 +110,14 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
 
                 First mCtx <- look
 
+                let ctx = case mCtx of
+                            Nothing -> Left (Nothing, s)
+                            Just (Left dc) -> Left (Just dc, s)
+                            Just (Right oc) -> Right (oc, s)
+
                 pure $ DepVarMap
                      $ M.singleton p
-                     $ NEM.singleton mCtx
-                     $ NES.singleton s
+                     $ CtxMap.singleton ctx
 
     finalize
         :: DepVar
@@ -118,12 +125,16 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
         -> ConstraintMap
     finalize var (DepVarMap m0)
         = unions $ do
-            (pkg, m1) <- M.toList m0
-            (mCtx, dss) <- NEL.toList $ NEM.toList m1
-            pure $ singleton pkg (PkgWithVer p0 v0) var mCtx $
-                case mCtx of
-                    Just (OrCtx _) -> Left (DepOrGroup (NES.map pure dss))
-                    _ -> Right (DepSet (NES.map pure dss))
+            let pwv = PkgWithVer p0 v0
+            (pkg, cm) <- M.toList m0
+            e <- CtxMap.toList cm >>= \case
+                Left (ctx, DepMap nm) -> do
+                    (spec, ()) <- NEL.toList $ NEM.toList nm
+                    pure $ Left (ctx, spec)
+                Right (ctx, OrGroupMap om) -> do
+                    (spec, ()) <- NEL.toList $ NEM.toList om
+                    pure $ Right (ctx, spec)
+            pure $ singleton pkg pwv var e
 
     isBlocker :: DepSpec -> Bool
     isBlocker = \case
@@ -137,11 +148,11 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
 -- | Internal data structure for organizing a 'DepVar' entry
 newtype DepVarMap = DepVarMap
     { getDepVarMap
-        :: Map Package (NEMap (Maybe DepContext) (NESet DepSpec))
-    } deriving (Show, Eq, Ord)
+        :: Map Package (ContextMap 'Nothing)
+    } deriving (Show)
 
 instance Semigroup DepVarMap where
-    DepVarMap m1 <> DepVarMap m2 = DepVarMap $ M.unionWith (NEM.unionWith NES.union) m1 m2
+    DepVarMap m1 <> DepVarMap m2 = DepVarMap $ M.unionWith (<>) m1 m2
 
 instance Monoid DepVarMap where
     mempty = DepVarMap M.empty

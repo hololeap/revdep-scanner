@@ -12,11 +12,14 @@ module RevdepScanner.Types
     , MatchMode(..)
     , LiftedMatchMode(..)
     , DepContext(..)
+    , OrContext(..)
+    , IsBool(..)
     ) where
 
 import Data.Hashable
 import Data.Kind
 import Data.List.NonEmpty (NonEmpty(..))
+import Data.Monoid
 import GHC.Generics
 
 import Data.Parsable
@@ -87,10 +90,7 @@ data LiftedMatchMode :: MatchMode -> Type where
 --
 --   This can be:
 --
---   [@'OrCtx'@]: When a relevant 'DepSpec' is encountered within a
---                @|| ( ... )@ block, it is useful to know the full
---                block where it was found. This is roughly equivalent to
---                'OrGroup'.
+--   [@'OrCtx'@]: /Separated out into 'OrContext'/
 --   [@'UseCtx'@]: It was encountered within a @flag? ( ... )@ block. The
 --                 context and USE flag are both stored. This is roughly
 --                 equivalent to 'UseGroup'.
@@ -102,13 +102,35 @@ data LiftedMatchMode :: MatchMode -> Type where
 --   the normal @( ... )@ blocks are trivial and should not be needed in the
 --   output for the user. This can be changed if needed.
 data DepContext
-    = OrCtx (NonEmpty (Either DepGroup DepSpec))
-    | UseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
+    = UseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
     | NotUseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
     deriving (Show, Eq, Ord, Generic, Hashable)
 
 instance Printable DepContext where
     toString = \case
-        OrCtx ne -> toString $ OrGroup ne
         UseCtx ne uf -> toString $ UseGroup ne uf
         NotUseCtx ne uf -> toString $ NotUseGroup ne uf
+
+-- | When a relevant 'DepSpec' is encountered within a @|| ( ... )@ block, it
+--   is useful to know the full block where it was found. This is roughly
+--   equivalent to 'OrGroup'.
+newtype OrContext
+    = OrCtx (NonEmpty (Either DepGroup DepSpec))
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass Hashable
+
+instance Printable OrContext where
+    toString (OrCtx ne) = toString $ OrGroup ne
+
+-- | Class for 'Monoid' wrappers for 'Bool'
+class (Monoid t, Ord t, Show t) => IsBool t where
+    toBool :: t -> Bool
+    fromBool :: Bool -> t
+
+instance IsBool Any where
+    toBool = getAny
+    fromBool = Any
+
+instance IsBool All where
+    toBool = getAll
+    fromBool = All
