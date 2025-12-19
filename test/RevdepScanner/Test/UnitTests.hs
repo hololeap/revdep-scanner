@@ -1,13 +1,17 @@
+{-# Language DataKinds #-}
 {-# Language OverloadedLists #-}
+{-# Language ScopedTypeVariables #-}
 
 module RevdepScanner.Test.UnitTests
     ( simpleTests
     ) where
 
-import Data.Foldable
-import qualified Data.HashMap.Strict as M
+import qualified Data.HashMap.Strict as HM
 import qualified Data.List.NonEmpty as NE
-import Data.Maybe (fromJust)
+import qualified Data.Map.NonEmpty as NEM
+import           Data.Map.NonEmpty (NEMap)
+import qualified Data.Map.Strict as M
+import Data.Monoid
 import Test.Tasty
 import Test.Tasty.HUnit
 import Validation
@@ -20,8 +24,10 @@ import RevdepScanner.CmdLine
 import RevdepScanner.Logic
 import RevdepScanner.Types
 import RevdepScanner.Types.ConstraintMap
-import RevdepScanner.Util (encodeString)
-import qualified RevdepScanner.Types.HashSet.NonEmpty as NES
+import           RevdepScanner.Types.ContextMap (ContextMap(..), evalContextMap)
+import RevdepScanner.Types.DepMap
+import RevdepScanner.Types.ResultMap
+import RevdepScanner.Util
 
 simpleTests :: TestTree
 simpleTests = testGroup "simple tests"
@@ -84,55 +90,102 @@ parseTests = testGroup "parse tests"
 
 example1 :: TestTree
 example1 = testGroup "example 1"
-    [ testCase "parsing" $ buildCMap simplePD1 @?= simpleCM1
-    , inputTestsMatching
-        [ inputTest simpleInput1 simpleCM1 $
-                simpleRM1
-        , inputTest simpleVerInput1 simpleCM1 $
-                simpleRM1
+    [ testCase "parsing" $ buildCMap pd1 @?= cm1
+    , testGroup "isSpecRelevant"
+        [ testsMatching
+            [ isSpecRelevantTest input1 depSpec1 True
+            , isSpecRelevantTest verInput1 depSpec1 True
+            ]
+        , testsNonMatching
+            [ isSpecRelevantTest input1 depSpec1 False
+            , isSpecRelevantTest verInput1 depSpec1 False
+            ]
         ]
-    , inputTestsNonMatching
-        [ inputTest simpleInput1 simpleCM1 $
-                M.empty
-        , inputTest simpleVerInput1 simpleCM1 $
-                M.empty
+    , testGroup "evalDepMap"
+        [ let ex = Just $ DepMap $ NEM.singleton depSpec1 (All True)
+          in  testsMatching
+                [ evalDepMapTest input1 udm1 ex
+                , evalDepMapTest verInput1 udm1 ex
+                ]
+        , testsNonMatching
+            [ evalDepMapTest input1 udm1 Nothing
+            , evalDepMapTest verInput1 udm1 Nothing
+            ]
+        ]
+    , testGroup "evalContextMap"
+        [ testsMatching
+            [ evalContextMapTest input1 ucm1 (Just rcm1)
+            , evalContextMapTest verInput1 ucm1 (Just rcm1)
+            ]
+        , testsNonMatching
+            [ evalContextMapTest input1 ucm1 Nothing
+            , evalContextMapTest verInput1 ucm1 Nothing
+            ]
+        ]
+    , testGroup "lookupResults"
+        [ testsMatching
+            [ lookupResultsTest input1 cm1 $
+                    mrm1
+            , lookupResultsTest verInput1 cm1 $
+                    mrm1
+            ]
+        , testsNonMatching
+            [ lookupResultsTest input1 cm1 $
+                    M.empty
+            , lookupResultsTest verInput1 cm1 $
+                    M.empty
+            ]
         ]
     ]
 
 -- | @app-misc/bar-0.1@ depends on @app-misc/foo@, by itself, in @RDEPEND@
-simplePD1 :: PkgDeps
-simplePD1 = parseDepBlock "app-misc" "bar" "0.1"
+pd1 :: PkgDeps
+pd1 = parseDepBlock "app-misc" "bar" "0.1"
     "app-misc/foo"
 
--- | Needs to be equivalent to @'buildCMap' 'simplePD1'@
-simpleCM1 :: ConstraintMap
-simpleCM1 = M.singleton simplePkg1 simpleRM1
+-- | Needs to be equivalent to @'buildCMap' 'pd1'@
+cm1 :: ConstraintMap
+cm1 = HM.singleton pkg1 urm1
 
-simpleRM1 :: ResultMap
-simpleRM1 = M.singleton simpleRevDep1
-    $ NES.singleton simpleDep1
+urm1 :: UnevaluatedResultMap
+urm1 = NEM.singleton revDep1 dep1
+
+mrm1 :: EvaluatedResultMap 'Matching
+mrm1 =
+    evalResultMap
+    (== depSpec1)
+    urm1
 
 -- @app-misc/foo@ with context in the 'ConstraintMap'
-simpleDep1 :: DepWithCtx
-simpleDep1 = DepWithCtx
-    simpleDepSpec1
-    RDEPEND
-    Nothing
+dep1 :: UnwrappedMap 'Nothing
+dep1 = NEM.singleton RDEPEND ucm1
+
+ucm1 :: ContextMap 'Nothing
+ucm1 = NormalCtxMap $ NEM.singleton Nothing udm1
+
+udm1 :: DepMap 'Nothing
+udm1 = DepMap $ NEM.singleton depSpec1 ()
+
+rcm1 :: ContextMap ('Just 'Matching)
+rcm1 = NormalCtxMap $ NEM.singleton Nothing rdm1
+
+rdm1 :: DepMap ('Just 'Matching)
+rdm1 = DepMap $ NEM.singleton depSpec1 (All True)
 
 -- | 'DepSpec' of @app-misc/foo@, which @app-misc/bar@ depends on
-simpleDepSpec1 :: DepSpec
-simpleDepSpec1 = UnversionedDepSpec
+depSpec1 :: DepSpec
+depSpec1 = UnversionedDepSpec
     Nothing
-    simplePkg1
+    pkg1
     Nothing
     Nothing
 
 -- |
-simplePkg1 :: Package
-simplePkg1 = Package (Category "app-misc") (PkgName "foo")
+pkg1 :: Package
+pkg1 = Package (Category "app-misc") (PkgName "foo")
 
-simpleRevDep1 :: PkgWithVer
-simpleRevDep1 = PkgWithVer
+revDep1 :: PkgWithVer
+revDep1 = PkgWithVer
     (Package (Category "app-misc") (PkgName "bar"))
     (Version
         (VersionNum (NE.singleton '0' NE.:| [NE.singleton '1']))
@@ -141,62 +194,135 @@ simpleRevDep1 = PkgWithVer
         Nothing
     )
 
-simpleInput1 :: String
-simpleInput1 = "app-misc/foo"
+input1 :: String
+input1 = "app-misc/foo"
 
-simpleVerInput1 :: String
-simpleVerInput1 = "app-misc/foo-0.2"
+verInput1 :: String
+verInput1 = "app-misc/foo-0.2"
 
 -- EXAMPLE 2 --
 
 example2 :: TestTree
 example2 = testGroup "example 2"
-    [ testCase "parsing" $ buildCMap simplePD2 @?= simpleCM2
-    , inputTestsMatching
-        [ inputTest simpleInput1 simpleCM2 $
-                simpleRM2
-        , inputTest simpleVerInputMatching2 simpleCM2 $
-                simpleRM2
-        , inputTest simpleVerInputNonMatching2 simpleCM2 $
-                M.empty
+    [ testCase "parsing" $ buildCMap pd2 @?= cm2
+    , testGroup "isSpecRelevant"
+        [ testsMatching
+            [ isSpecRelevantTest input1 depSpecLower2 True
+            , isSpecRelevantTest input1 depSpecUpper2 True
+            , isSpecRelevantTest verInputMatching2 depSpecLower2 True
+            , isSpecRelevantTest verInputMatching2 depSpecUpper2 True
+            , isSpecRelevantTest verInputNonMatching2 depSpecLower2 True
+            , isSpecRelevantTest verInputNonMatching2 depSpecUpper2 False
+            ]
+        , testsNonMatching
+            [ isSpecRelevantTest input1 depSpecLower2 False
+            , isSpecRelevantTest input1 depSpecUpper2 False
+            , isSpecRelevantTest verInputMatching2 depSpecLower2 False
+            , isSpecRelevantTest verInputMatching2 depSpecUpper2 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecLower2 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecUpper2 True
+            ]
         ]
-    , inputTestsNonMatching
-        [ inputTest simpleInput1 simpleCM2 $
-                M.empty
-        , inputTest simpleVerInputMatching2 simpleCM2 $
-                M.empty
-        , inputTest simpleVerInputNonMatching2 simpleCM2 $
-                simpleRM2
+    , testGroup "evalDepMap"
+        [ testsMatching
+            [ evalDepMapTest input1 udm2 (Just rdm_verInputMatching2)
+            , evalDepMapTest verInputMatching2 udm2 (Just rdm_verInputMatching2)
+            , evalDepMapTest verInputNonMatching2 udm2 Nothing
+            ]
+        , testsNonMatching
+            [ evalDepMapTest input1 udm2 Nothing
+            , evalDepMapTest verInputMatching2 udm2 Nothing
+            , evalDepMapTest verInputNonMatching2 udm2 (Just rdm_verInputNonMatching2)
+            ]
+        ]
+    , testGroup "evalContextMap"
+        [ testsMatching
+            [ evalContextMapTest input1 ucm2 (Just rcm_verInputMatching2)
+            , evalContextMapTest verInputMatching2 ucm2 (Just rcm_verInputMatching2)
+            , evalContextMapTest verInputNonMatching2 ucm2 Nothing
+            ]
+        , testsNonMatching
+            [ evalContextMapTest input1 ucm2 Nothing
+            , evalContextMapTest verInputMatching2 ucm2 Nothing
+            , evalContextMapTest verInputNonMatching2 ucm2 (Just rcm_verInputNonMatching2)
+            ]
+        ]
+    , testGroup "lookupResults"
+        [ testsMatching
+            [ lookupResultsTest input1 cm2 $
+                    rm_verInputMatching2
+            , lookupResultsTest verInputMatching2 cm2 $
+                    rm_verInputMatching2
+            , lookupResultsTest verInputNonMatching2 cm2 $
+                    M.empty
+            ]
+        , testsNonMatching
+            [ lookupResultsTest input1 cm2 $
+                    M.empty
+            , lookupResultsTest verInputMatching2 cm2 $
+                    M.empty
+            , lookupResultsTest verInputNonMatching2 cm2 $
+                    rm_verInputNonMatching2
+            ]
         ]
     ]
 
 -- | @app-misc/bar-0.1@ depends on @>=app-misc/foo-0.1@, and @<app-misc/foo-0.2@,
 --   in @RDEPEND@
-simplePD2 :: PkgDeps
-simplePD2 = parseDepBlock "app-misc" "bar" "0.1"
+pd2 :: PkgDeps
+pd2 = parseDepBlock "app-misc" "bar" "0.1"
     ">=app-misc/foo-0.1 <app-misc/foo-0.2"
 
--- | Needs to be equivalent to @'buildCMap' 'simplePD2'@
-simpleCM2 :: ConstraintMap
-simpleCM2 = M.singleton simplePkg1 simpleRM2
+-- | Needs to be equivalent to @'buildCMap' 'pd2'@
+cm2 :: ConstraintMap
+cm2 = HM.singleton pkg1 urm2
 
-simpleRM2 :: ResultMap
-simpleRM2 = M.singleton simpleRevDep1
-    $ fromJust $ NES.fromList
-    [ simpleDepLower2
-    , simpleDepUpper2
-    ]
+urm2 :: UnevaluatedResultMap
+urm2
+    = NEM.singleton revDep1
+    $ NEM.singleton RDEPEND
+    $ ucm2
 
--- | Lower constraint of @app-misc/foo@ with context in the 'ConstraintMap'
-simpleDepLower2 :: DepWithCtx
-simpleDepLower2 = DepWithCtx
-    simpleDepSpecLower2
-    RDEPEND
-    Nothing
+ucm2 :: ContextMap 'Nothing
+ucm2 = NormalCtxMap $ NEM.singleton Nothing udm2
+
+udm2 :: DepMap 'Nothing
+udm2
+    = DepMap $ NEM.fromList
+    $ (depSpecLower2, ()) NE.:| [(depSpecUpper2, ())]
+
+-- | Matches 'verInputMatching2' (@"app-misc/foo-0.1.1"@)
+rm_verInputMatching2 :: EvaluatedResultMap 'Matching
+rm_verInputMatching2
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputMatching2
+
+rcm_verInputMatching2 :: ContextMap ('Just Matching)
+rcm_verInputMatching2
+    = NormalCtxMap $ NEM.singleton Nothing rdm_verInputMatching2
+
+rdm_verInputMatching2 :: DepMap ('Just 'Matching)
+rdm_verInputMatching2
+    = DepMap $ NEM.fromList
+    $ (depSpecLower2, All True) NE.:| [(depSpecUpper2, All True)]
+
+-- | Matches 'verInputNonMatching2' (@"app-misc/foo-0.2"@)
+rm_verInputNonMatching2 :: EvaluatedResultMap 'NonMatching
+rm_verInputNonMatching2
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputNonMatching2
+
+rcm_verInputNonMatching2 :: ContextMap ('Just 'NonMatching)
+rcm_verInputNonMatching2
+    = NormalCtxMap $ NEM.singleton Nothing rdm_verInputNonMatching2
+
+rdm_verInputNonMatching2 :: DepMap ('Just 'NonMatching)
+rdm_verInputNonMatching2
+    = DepMap $ NEM.singleton depSpecUpper2 (Any True)
 
 -- | 'DepSpec' of @>=app-misc/foo-0.1@, which @app-misc/bar@ depends on
-simpleDepSpecLower2 :: DepSpec
-simpleDepSpecLower2 = VersionedDepSpec
+depSpecLower2 :: DepSpec
+depSpecLower2 = VersionedDepSpec
     Nothing
     (VPkgGE
         (Package (Category "app-misc") (PkgName "foo"))
@@ -210,16 +336,9 @@ simpleDepSpecLower2 = VersionedDepSpec
     Nothing
     Nothing
 
--- | Upper constraint of @app-misc/foo@ with context in the 'ConstraintMap'
-simpleDepUpper2 :: DepWithCtx
-simpleDepUpper2 = DepWithCtx
-    simpleDepSpecUpper2
-    RDEPEND
-    Nothing
-
 -- | 'DepSpec' of @<app-misc/foo-0.2@, which @app-misc/bar@ depends on
-simpleDepSpecUpper2 :: DepSpec
-simpleDepSpecUpper2 = VersionedDepSpec
+depSpecUpper2 :: DepSpec
+depSpecUpper2 = VersionedDepSpec
     Nothing
     (VPkgLT
         (Package (Category "app-misc") (PkgName "foo"))
@@ -233,97 +352,184 @@ simpleDepSpecUpper2 = VersionedDepSpec
     Nothing
     Nothing
 
-simpleVerInputMatching2 :: String
-simpleVerInputMatching2 = "app-misc/foo-0.1.1"
+verInputMatching2 :: String
+verInputMatching2 = "app-misc/foo-0.1.1"
 
-simpleVerInputNonMatching2 :: String
-simpleVerInputNonMatching2 = "app-misc/foo-0.2"
+verInputNonMatching2 :: String
+verInputNonMatching2 = "app-misc/foo-0.2"
 
 -- EXAMPLE 3 --
 
 example3 :: TestTree
 example3 = testGroup "example 3"
-    [ testCase "parsing" $ buildCMap simplePD3 @?= simpleCM3
-    , inputTestsMatching
-        [ inputTest simpleInput1 simpleCM3 $
-                M.singleton simpleRevDep1 -- "app-misc/foo"
-                    (fromJust $ NES.fromList
-                        [ simpleDepLower2 -- ">=app-misc/foo-0.1"
-                        , simpleDepUpper2 -- ">=app-misc/foo-0.2"
-                        ]
-                    )
-        , inputTest simpleVerInputMatching2 simpleCM3 $
-                simpleRM2
-        , inputTest simpleVerInputNonMatching2 simpleCM3 $
-                M.empty
-        , inputTest simpleVerInputMatching3 simpleCM3 $
-                simpleRM3
-        , inputTest simpleVerInputNonMatching3 simpleCM3 $
-                M.empty
+    [ testCase "parsing" $ buildCMap pd3 @?= cm3
+    , testGroup "isSpecRelevant"
+        [ testsMatching
+            [ isSpecRelevantTest input1 depSpecLower3 False
+            , isSpecRelevantTest input1 depSpecUpper3 False
+            , isSpecRelevantTest verInputMatching2 depSpecLower3 False
+            , isSpecRelevantTest verInputMatching2 depSpecUpper3 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecLower3 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecUpper3 False
+            , isSpecRelevantTest verInputMatching3 depSpecLower2 False
+            , isSpecRelevantTest verInputMatching3 depSpecUpper2 False
+            , isSpecRelevantTest verInputMatching3 depSpecLower3 True
+            , isSpecRelevantTest verInputMatching3 depSpecUpper3 True
+            , isSpecRelevantTest verInputNonMatching3 depSpecLower2 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecUpper2 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecLower3 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecUpper3 True
+            ]
+        , testsNonMatching
+            [ isSpecRelevantTest input1 depSpecLower3 False
+            , isSpecRelevantTest input1 depSpecUpper3 False
+            , isSpecRelevantTest verInputMatching2 depSpecLower3 False
+            , isSpecRelevantTest verInputMatching2 depSpecUpper3 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecLower3 False
+            , isSpecRelevantTest verInputNonMatching2 depSpecUpper3 False
+            , isSpecRelevantTest verInputMatching3 depSpecLower2 False
+            , isSpecRelevantTest verInputMatching3 depSpecUpper2 False
+            , isSpecRelevantTest verInputMatching3 depSpecLower3 False
+            , isSpecRelevantTest verInputMatching3 depSpecUpper3 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecLower2 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecUpper2 False
+            , isSpecRelevantTest verInputNonMatching3 depSpecLower3 True
+            , isSpecRelevantTest verInputNonMatching3 depSpecUpper3 False
+            ]
         ]
-    , inputTestsNonMatching
-        [ inputTest simpleInput1 simpleCM3 $
-                M.empty
-        , inputTest simpleVerInputMatching2 simpleCM3 $
-                M.empty
-        , inputTest simpleVerInputNonMatching2 simpleCM3 $
-                simpleRM2
-        , inputTest simpleVerInputMatching3 simpleCM3 $
-                M.empty
-        , inputTest simpleVerInputNonMatching3 simpleCM3 $
-                simpleRM3
+    , testGroup "evalDepMap"
+        [ testsMatching
+            [ evalDepMapTest input1 udm3 Nothing
+            , evalDepMapTest verInputMatching2 udm3 Nothing
+            , evalDepMapTest verInputNonMatching2 udm3 Nothing
+            , evalDepMapTest verInputMatching3 udm3 (Just rdm_verInputMatching3)
+            , evalDepMapTest verInputNonMatching3 udm3 Nothing
+            ]
+            , testsNonMatching
+            [ evalDepMapTest input1 udm3 Nothing
+            , evalDepMapTest verInputMatching2 udm3 Nothing
+            , evalDepMapTest verInputNonMatching2 udm3 Nothing
+            , evalDepMapTest verInputMatching3 udm3 Nothing
+            , evalDepMapTest verInputNonMatching3 udm3 (Just rdm_verInputNonMatching3)
+            ]
+        ]
+    , testGroup "evalContextMap"
+        [ testsMatching
+            [ evalContextMapTest input1 ucm3 Nothing
+            , evalContextMapTest verInputMatching2 ucm3 Nothing
+            , evalContextMapTest verInputNonMatching2 ucm3 Nothing
+            , evalContextMapTest verInputMatching3 ucm3 (Just rcm_verInputMatching3)
+            , evalContextMapTest verInputNonMatching3 ucm3 Nothing
+            ]
+        , testsNonMatching
+            [ evalContextMapTest input1 ucm3 Nothing
+            , evalContextMapTest verInputMatching2 ucm3 Nothing
+            , evalContextMapTest verInputNonMatching2 ucm3 Nothing
+            , evalContextMapTest verInputMatching2 ucm2 Nothing
+            , evalContextMapTest verInputNonMatching2 ucm2 (Just rcm_verInputNonMatching2)
+            ]
+        ]
+    , testGroup "lookupResults"
+        [ testsMatching
+            [ lookupResultsTest input1 cm3 $
+                    rm_verInputMatching2
+            , lookupResultsTest verInputMatching2 cm3 $
+                    rm_verInputMatching2
+            , lookupResultsTest verInputNonMatching2 cm3 $
+                    M.empty
+            , lookupResultsTest verInputMatching3 cm3 $
+                    rm_verInputMatching3
+            , lookupResultsTest verInputNonMatching3 cm3 $
+                    M.empty
+            ]
+        , testsNonMatching
+            [ lookupResultsTest input1 cm3 $
+                    M.empty
+            , lookupResultsTest verInputMatching2 cm3 $
+                    M.empty
+            , lookupResultsTest verInputNonMatching2 cm3 $
+                    rm_verInputNonMatching2
+            , lookupResultsTest verInputMatching3 cm3 $
+                    M.empty
+            , lookupResultsTest verInputNonMatching3 cm3 $
+                    rm_verInputNonMatching3
+            ]
         ]
     ]
 
 -- | @app-misc/bar-0.1@ depends on @>=app-misc/foo-0.1@, and @<app-misc/foo-0.2@,
 --   as well as a conditional @>=app-misc/baz-0.3@ and @<app-misc/baz-0.4@ for
 --   the @baz@ USE flag.
-simplePD3 :: PkgDeps
-simplePD3 = parseDepBlock "app-misc" "bar" "0.1"
+pd3 :: PkgDeps
+pd3 = parseDepBlock "app-misc" "bar" "0.1"
     ">=app-misc/foo-0.1 <app-misc/foo-0.2 baz? ( >=app-misc/baz-0.3 <app-misc/baz-0.4 )"
 
--- | Needs to be equivalent to @'buildCMap' 'simplePD3'@
-simpleCM3 :: ConstraintMap
-simpleCM3 = M.fromList
-    [ (simplePkg1, simpleRM2)
-    , (simplePkg3, simpleRM3)
-    ]
-  where
-    simplePkg3 :: Package
-    simplePkg3 = Package (Category "app-misc") (PkgName "baz")
-
-simpleRM3 :: ResultMap
-simpleRM3 = M.singleton simpleRevDep1
-    $ fromJust $ NES.fromList
-    [ simpleDepLower3
-    , simpleDepUpper3
+-- | Needs to be equivalent to @'buildCMap' 'pd3'@
+cm3 :: ConstraintMap
+cm3 = HM.fromList
+    [ (pkg1, urm2)
+    , (pkg3, urm3)
     ]
 
--- | Lower constraint of @app-misc/baz@ with context in the 'ConstraintMap'
-simpleDepLower3 :: DepWithCtx
-simpleDepLower3 = DepWithCtx
-    simpleDepSpecLower3
-    RDEPEND
-    (Just simpleDepCtx3)
+urm3 :: UnevaluatedResultMap
+urm3
+    = NEM.singleton revDep1
+    $ NEM.singleton RDEPEND
+    $ ucm3
+
+ucm3 :: ContextMap 'Nothing
+ucm3 = NormalCtxMap $ NEM.singleton (Just depCtx3) udm3
+
+udm3 :: DepMap 'Nothing
+udm3
+    = DepMap $ NEM.fromList
+    $ (depSpecLower3, ()) NE.:| [(depSpecUpper3, ())]
+
+rm_verInputMatching3 :: EvaluatedResultMap 'Matching
+rm_verInputMatching3
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputMatching3
+
+rcm_verInputMatching3 :: ContextMap ('Just 'Matching)
+rcm_verInputMatching3
+    = NormalCtxMap $ NEM.singleton (Just depCtx3) rdm_verInputMatching3
+
+rdm_verInputMatching3 :: DepMap ('Just 'Matching)
+rdm_verInputMatching3
+    = DepMap $ NEM.fromList
+    $ (depSpecLower3, All True) NE.:| [(depSpecUpper3, All True)]
+
+rm_verInputNonMatching3 :: EvaluatedResultMap 'NonMatching
+rm_verInputNonMatching3
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputNonMatching3
+
+rcm_verInputNonMatching3 :: ContextMap ('Just 'NonMatching)
+rcm_verInputNonMatching3
+    = NormalCtxMap $ NEM.singleton (Just depCtx3) rdm_verInputNonMatching3
+
+rdm_verInputNonMatching3 :: DepMap ('Just 'NonMatching)
+rdm_verInputNonMatching3
+    = DepMap $ NEM.singleton depSpecLower3 (Any True)
 
 -- | Carries the context of
 --
 --   @
 --   baz? ( >=app-misc/baz-0.3 <app-misc/baz-0.4 )
 --   @
-simpleDepCtx3 :: DepContext
-simpleDepCtx3 =
+depCtx3 :: DepContext
+depCtx3 =
     UseCtx
     (NE.fromList
-        [ Right simpleDepSpecLower3
-        , Right simpleDepSpecUpper3
+        [ Right depSpecLower3
+        , Right depSpecUpper3
         ]
     )
     (UseFlag "baz")
 
 -- | 'DepSpec' of @>=app-misc/baz-0.3@, which @app-misc/bar@ depends on
-simpleDepSpecLower3 :: DepSpec
-simpleDepSpecLower3 = VersionedDepSpec
+depSpecLower3 :: DepSpec
+depSpecLower3 = VersionedDepSpec
     Nothing
     (VPkgGE
         (Package (Category "app-misc") (PkgName "baz"))
@@ -337,17 +543,10 @@ simpleDepSpecLower3 = VersionedDepSpec
     Nothing
     Nothing
 
--- | Upper constraint of @app-misc/foo@ with context in the 'ConstraintMap'
-simpleDepUpper3 :: DepWithCtx
-simpleDepUpper3 = DepWithCtx
-    simpleDepSpecUpper3
-    RDEPEND
-    (Just simpleDepCtx3)
-
 -- | 'DepSpec' of @<app-misc/baz-0.4@, which @app-misc/bar@ depends on (needed by
 --   'isDepRelevant')
-simpleDepSpecUpper3 :: DepSpec
-simpleDepSpecUpper3 = VersionedDepSpec
+depSpecUpper3 :: DepSpec
+depSpecUpper3 = VersionedDepSpec
     Nothing
     (VPkgLT
         (Package (Category "app-misc") (PkgName "baz"))
@@ -361,75 +560,177 @@ simpleDepSpecUpper3 = VersionedDepSpec
     Nothing
     Nothing
 
-simpleVerInputMatching3 :: String
-simpleVerInputMatching3 = "app-misc/baz-0.3"
+pkg3 :: Package
+pkg3 = Package (Category "app-misc") (PkgName "baz")
 
-simpleVerInputNonMatching3 :: String
-simpleVerInputNonMatching3 = "app-misc/baz-0.2"
+verInputMatching3 :: String
+verInputMatching3 = "app-misc/baz-0.3"
+
+verInputNonMatching3 :: String
+verInputNonMatching3 = "app-misc/baz-0.2"
 
 -- OR LOGIC --
 
 example_Or :: TestTree
 example_Or = testGroup "Or groups"
-    [ testCase "parsing" $ buildCMap simplePD_Or @?= simpleCM_Or
-    , inputTestsMatching
-        [ inputTest simpleInput1 simpleCM_Or $
-                simpleRM_Or
-        , inputTest simpleVerInputMatchingLower_Or simpleCM_Or $
-                M.singleton simpleRevDep1
-                    $ NES.singleton simpleDepFirst_Or
-        , inputTest simpleVerInputMatchingUpper_Or simpleCM_Or $
-                M.singleton simpleRevDep1
-                    $ NES.singleton simpleDepSecond_Or
-        , inputTest simpleVerInputNonMatching_Or simpleCM_Or $
-                M.empty
+    [ testCase "parsing" $ buildCMap pd_Or @?= cm_Or
+    , testGroup "isSpecRelevant"
+        [ testsMatching
+            [ isSpecRelevantTest input1 depSpecFirst_Or True
+            , isSpecRelevantTest input1 depSpecSecond_Or True
+            , isSpecRelevantTest verInputMatchingLower_Or depSpecFirst_Or True
+            , isSpecRelevantTest verInputMatchingLower_Or depSpecSecond_Or False
+            , isSpecRelevantTest verInputMatchingUpper_Or depSpecFirst_Or False
+            , isSpecRelevantTest verInputMatchingUpper_Or depSpecSecond_Or True
+            , isSpecRelevantTest verInputNonMatching_Or depSpecFirst_Or False
+            , isSpecRelevantTest verInputNonMatching_Or depSpecSecond_Or False
+            ]
+        , testsNonMatching
+            [ isSpecRelevantTest input1 depSpecFirst_Or False
+            , isSpecRelevantTest input1 depSpecSecond_Or False
+            , isSpecRelevantTest verInputMatchingLower_Or depSpecFirst_Or False
+            , isSpecRelevantTest verInputMatchingLower_Or depSpecSecond_Or True
+            , isSpecRelevantTest verInputMatchingUpper_Or depSpecFirst_Or True
+            , isSpecRelevantTest verInputMatchingUpper_Or depSpecSecond_Or False
+            , isSpecRelevantTest verInputNonMatching_Or depSpecFirst_Or True
+            , isSpecRelevantTest verInputNonMatching_Or depSpecSecond_Or True
+            ]
         ]
-    , inputTestsNonMatching
-        [ inputTest simpleInput1 simpleCM_Or $
-                M.empty
-        , inputTest simpleVerInputMatchingLower_Or simpleCM_Or $
-                M.empty
-        , inputTest simpleVerInputMatchingUpper_Or simpleCM_Or $
-                M.empty
-        , inputTest simpleVerInputNonMatching_Or simpleCM_Or $
-                simpleRM_Or
+    , testGroup "evalDepMap"
+        [ testsMatching
+            [ evalDepMapTest input1 udm_Or (Just rdm_input1_Or)
+            , evalDepMapTest verInputMatchingLower_Or udm_Or (Just rdm_verInputMatchingLower_Or)
+            , evalDepMapTest verInputMatchingUpper_Or udm_Or (Just rdm_verInputMatchingUpper_Or)
+            , evalDepMapTest verInputNonMatching_Or udm_Or Nothing
+            ]
+        , testsNonMatching
+            [ evalDepMapTest input1 udm_Or Nothing
+            , evalDepMapTest verInputMatchingLower_Or udm_Or Nothing
+            , evalDepMapTest verInputMatchingUpper_Or udm_Or Nothing
+            , evalDepMapTest verInputNonMatching_Or udm_Or (Just rdm_verInputNonMatching_Or)
+            ]
+        ]
+    , testGroup "evalContextMap"
+        [ testsMatching
+            [ evalContextMapTest input1 ucm_Or (Just rcm_input1_Or)
+            , evalContextMapTest verInputMatchingLower_Or ucm_Or (Just rcm_verInputMatchingLower_Or)
+            , evalContextMapTest verInputMatchingUpper_Or ucm_Or (Just rcm_verInputMatchingUpper_Or)
+            , evalContextMapTest verInputNonMatching_Or ucm_Or Nothing
+            ]
+        , testsNonMatching
+            [ evalContextMapTest input1 ucm_Or Nothing
+            , evalContextMapTest verInputMatchingLower_Or ucm_Or Nothing
+            , evalContextMapTest verInputMatchingUpper_Or ucm_Or Nothing
+            , evalContextMapTest verInputNonMatching_Or ucm_Or (Just rcm_verInputNonMatching_Or)
+            ]
+        ]
+    , testGroup "lookupResults"
+        [ testsMatching
+            [ lookupResultsTest input1 cm_Or $
+                    rm_input1_Or
+            , lookupResultsTest verInputMatchingLower_Or cm_Or $
+                    rm_verInputMatchingLower_Or
+            , lookupResultsTest verInputMatchingUpper_Or cm_Or $
+                    rm_verInputMatchingUpper_Or
+            , lookupResultsTest verInputNonMatching_Or cm_Or $
+                    M.empty
+            ]
+        , testsNonMatching
+            [ lookupResultsTest input1 cm_Or $
+                    M.empty
+            , lookupResultsTest verInputMatchingLower_Or cm_Or $
+                    M.empty
+            , lookupResultsTest verInputMatchingUpper_Or cm_Or $
+                    M.empty
+            , lookupResultsTest verInputNonMatching_Or cm_Or $
+                    rm_verInputNonMatching_Or
+            ]
         ]
     ]
 
 -- | @app-misc/bar-0.1@ depends on @<app-misc/foo-0.3@, /or/ @>=app-misc/foo-0.4@,
 --   effectively including all versions of @app-misc/foo@ /except/ @=app-misc/foo-0.3.*@.
-simplePD_Or :: PkgDeps
-simplePD_Or = parseDepBlock "app-misc" "bar" "0.1"
+pd_Or :: PkgDeps
+pd_Or = parseDepBlock "app-misc" "bar" "0.1"
     "|| ( <app-misc/foo-0.3 >=app-misc/foo-0.4 )"
 
--- | Needs to be equivalent to @'buildCMap' 'simplePD_Or'@
-simpleCM_Or :: ConstraintMap
-simpleCM_Or = M.singleton simplePkg1 simpleRM_Or
+-- | Needs to be equivalent to @'buildCMap' 'pd_Or'@
+cm_Or :: ConstraintMap
+cm_Or = HM.singleton pkg1 urm_Or
 
-simpleRM_Or :: ResultMap
-simpleRM_Or = M.singleton simpleRevDep1
-    $ fromJust $ NES.fromList
-        [ simpleDepFirst_Or
-        , simpleDepSecond_Or
-        ]
+urm_Or :: UnevaluatedResultMap
+urm_Or
+    = NEM.singleton revDep1
+    $ NEM.singleton RDEPEND
+    $ ucm_Or
 
-simpleDepFirst_Or :: DepWithCtx
-simpleDepFirst_Or = DepWithCtx
-    simpleDepSpecFirst_Or
-    RDEPEND
-    (Just simpleDepCtx_Or)
+ucm_Or :: ContextMap 'Nothing
+ucm_Or = OrGroupCtxMap $ NEM.singleton depCtx_Or udm_Or
 
-simpleDepSecond_Or :: DepWithCtx
-simpleDepSecond_Or = DepWithCtx
-    simpleDepSpecSecond_Or
-    RDEPEND
-    (Just simpleDepCtx_Or)
+udm_Or :: OrGroupMap 'Nothing
+udm_Or
+    = OrGroupMap $ NEM.fromList
+    $ (depSpecFirst_Or, ()) NE.:| [(depSpecSecond_Or, ())]
 
-simpleDepSpecFirst_Or :: DepSpec
-simpleDepSpecFirst_Or = VersionedDepSpec
+rm_input1_Or :: EvaluatedResultMap 'Matching
+rm_input1_Or
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_input1_Or
+
+rcm_input1_Or :: ContextMap ('Just 'Matching)
+rcm_input1_Or
+    = OrGroupCtxMap $ NEM.singleton depCtx_Or rdm_input1_Or
+
+rdm_input1_Or :: OrGroupMap ('Just Matching)
+rdm_input1_Or
+    = OrGroupMap $ NEM.fromList
+    $ (depSpecFirst_Or, Any True) NE.:| [(depSpecSecond_Or, Any True)]
+
+rm_verInputMatchingLower_Or :: EvaluatedResultMap 'Matching
+rm_verInputMatchingLower_Or
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputMatchingLower_Or
+
+rcm_verInputMatchingLower_Or :: ContextMap ('Just Matching)
+rcm_verInputMatchingLower_Or
+    = OrGroupCtxMap $ NEM.singleton depCtx_Or rdm_verInputMatchingLower_Or
+
+rdm_verInputMatchingLower_Or :: OrGroupMap ('Just Matching)
+rdm_verInputMatchingLower_Or
+    = OrGroupMap $ NEM.singleton depSpecFirst_Or (Any True)
+
+rm_verInputMatchingUpper_Or :: EvaluatedResultMap 'Matching
+rm_verInputMatchingUpper_Or
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputMatchingUpper_Or
+
+rcm_verInputMatchingUpper_Or :: ContextMap ('Just 'Matching)
+rcm_verInputMatchingUpper_Or
+    = OrGroupCtxMap $ NEM.singleton depCtx_Or rdm_verInputMatchingUpper_Or
+
+rdm_verInputMatchingUpper_Or :: OrGroupMap ('Just 'Matching)
+rdm_verInputMatchingUpper_Or
+    = OrGroupMap $ NEM.singleton depSpecSecond_Or (Any True)
+
+rm_verInputNonMatching_Or :: EvaluatedResultMap 'NonMatching
+rm_verInputNonMatching_Or
+    = M.singleton revDep1
+    $ NEM.singleton RDEPEND rcm_verInputNonMatching_Or
+
+rcm_verInputNonMatching_Or :: ContextMap ('Just 'NonMatching)
+rcm_verInputNonMatching_Or
+    = OrGroupCtxMap $ NEM.singleton depCtx_Or rdm_verInputNonMatching_Or
+
+rdm_verInputNonMatching_Or :: OrGroupMap ('Just 'NonMatching)
+rdm_verInputNonMatching_Or
+    = OrGroupMap $ NEM.fromList
+    $ (depSpecFirst_Or, All True) NE.:| [(depSpecSecond_Or, All True)]
+
+depSpecFirst_Or :: DepSpec
+depSpecFirst_Or = VersionedDepSpec
     Nothing
     (VPkgLT
-        simplePkg1
+        pkg1
         (Version
             (VersionNum (NE.singleton '0' NE.:| [NE.singleton '3']))
             Nothing
@@ -440,11 +741,11 @@ simpleDepSpecFirst_Or = VersionedDepSpec
     Nothing
     Nothing
 
-simpleDepSpecSecond_Or :: DepSpec
-simpleDepSpecSecond_Or = VersionedDepSpec
+depSpecSecond_Or :: DepSpec
+depSpecSecond_Or = VersionedDepSpec
     Nothing
     (VPkgGE
-        simplePkg1
+        pkg1
         (Version
             (VersionNum (NE.singleton '0' NE.:| [NE.singleton '4']))
             Nothing
@@ -455,50 +756,85 @@ simpleDepSpecSecond_Or = VersionedDepSpec
     Nothing
     Nothing
 
-simpleDepCtx_Or :: DepContext
-simpleDepCtx_Or =
+depCtx_Or :: OrContext
+depCtx_Or =
     OrCtx
     (NE.fromList
-        [ Right simpleDepSpecFirst_Or
-        , Right simpleDepSpecSecond_Or
+        [ Right depSpecFirst_Or
+        , Right depSpecSecond_Or
         ]
     )
 
-simpleVerInputMatchingLower_Or :: String
-simpleVerInputMatchingLower_Or = "app-misc/foo-0.2"
+verInputMatchingLower_Or :: String
+verInputMatchingLower_Or = "app-misc/foo-0.2"
 
-simpleVerInputMatchingUpper_Or :: String
-simpleVerInputMatchingUpper_Or = "app-misc/foo-0.4"
+verInputMatchingUpper_Or :: String
+verInputMatchingUpper_Or = "app-misc/foo-0.4"
 
-simpleVerInputNonMatching_Or :: String
-simpleVerInputNonMatching_Or = "app-misc/foo-0.3"
+verInputNonMatching_Or :: String
+verInputNonMatching_Or = "app-misc/foo-0.3"
 ---
 
-inputTestsMatching :: [MatchMode -> TestTree] -> TestTree
-inputTestsMatching ts = testGroup "Matching" $ ts <*> [Matching]
+testsMatching :: [LiftedMatchMode 'Matching -> TestTree] -> TestTree
+testsMatching ts = testGroup "Matching" $ ts <*> [LMatching]
 
-inputTestsNonMatching :: [MatchMode -> TestTree] -> TestTree
-inputTestsNonMatching ts = testGroup "NonMatching" $ ts <*> [NonMatching]
+testsNonMatching :: [LiftedMatchMode 'NonMatching -> TestTree] -> TestTree
+testsNonMatching ts = testGroup "NonMatching" $ ts <*> [LNonMatching]
 
-inputTest
-    :: String
+lookupResultsTest
+    :: AllDepMaps m '[ IsBool ]
+    => String
     -> ConstraintMap
-    -> ResultMap
-    -> MatchMode
+    -> EvaluatedResultMap m
+    -> LiftedMatchMode m
     -> TestTree
-inputTest inStr cmap ex mode
+lookupResultsTest inStr cmap ex mode
     = testCase (show inStr)
-        $ ppRMap (lookupResults mode (inputString inStr) cmap)
-            @?= ppRMap ex
-  where
-    ppRMap :: ResultMap -> M.HashMap String [(String, String, String)]
-    ppRMap = M.map (map ppDWC . toList) . M.mapKeys toString
-
-    ppDWC :: DepWithCtx -> (String, String, String)
-    ppDWC (DepWithCtx s v mc) = (toString s, show v, show (toString <$> mc))
+        $ lookupResults mode (inputString inStr) cmap
+            @?= ex
 
 inputString :: String -> CmdlinePkg
 inputString = validation (error . show) id . parsePkg
+
+isSpecRelevantTest :: String -> DepSpec -> Bool -> LiftedMatchMode m -> TestTree
+isSpecRelevantTest inStr spec ex mode
+    = testCase msg
+    $ let res = isSpecRelevant mode (inputString inStr) spec
+      in  case ex of
+            True -> res @? inStr ++ " did not match " ++ toString spec
+            False -> not res @? inStr ++ " matches " ++ toString spec
+  where
+    msg = show inStr ++ mch ++ toString spec
+    mch | ex = " should match "
+        | otherwise = " should not match "
+
+evalDepMapTest
+    :: ( IsDepMap t
+       , Show (t 'Nothing)
+       , Show (t ('Just m))
+       , Eq (t ('Just m))
+       , IsBool (MatchLogic t ('Just m)) )
+    => String
+    -> t 'Nothing
+    -> Maybe (t ('Just m))
+    -> LiftedMatchMode m
+    -> TestTree
+evalDepMapTest inStr dm ex mode = testCase msg
+    $ evalDepMap (isSpecRelevant mode (inputString inStr)) dm @?= ex
+  where
+    msg = show inStr
+
+evalContextMapTest
+    :: AllDepMaps m '[ IsBool ]
+    => String
+    -> ContextMap 'Nothing
+    -> Maybe (ContextMap ('Just m))
+    -> LiftedMatchMode m
+    -> TestTree
+evalContextMapTest inStr cm ex mode = testCase msg
+    $ evalContextMap (isSpecRelevant mode (inputString inStr)) cm @?= ex
+  where
+    msg = show inStr
 
 -- | Generate a 'PkgDeps' by parsing a 'DepBlock'. This adds
 --   all dep specs to @RDEPEND@.
@@ -526,3 +862,7 @@ parseDepBlock cat pkg v b
     ver = case runParsable (encodeString v) of
         Right v' -> v'
         Left e -> error $ "Could not parse Version " ++ show v ++ ": " ++ show e
+
+
+type UnwrappedMap m = NEMap DepVar (ContextMap m)
+
