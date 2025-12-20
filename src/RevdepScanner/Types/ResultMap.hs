@@ -22,7 +22,7 @@ import RevdepScanner.Types
 import RevdepScanner.Types.ContextMap
 import RevdepScanner.Types.DepMap
 
--- | A 'Map' from a package/version pair (e.g. the ebuild/revdep) to
+-- | A 'Map' from a package\/version pair (e.g. the ebuild\/revdep) to
 --   relevant dependencies and their context.
 type ResultMap' (f :: Type -> Type -> Type) (m :: Maybe MatchMode)
     = f PkgWithVer -- revdep (ebuild)
