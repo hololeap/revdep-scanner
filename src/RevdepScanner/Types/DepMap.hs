@@ -18,19 +18,18 @@ module RevdepScanner.Types.DepMap
 import Control.Monad
 import Control.Monad.Writer
 import Data.Kind
-import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
-import           Data.Map.Strict (Map)
 import Data.Monoid
 
 import Distribution.Portage.Types
 
 import RevdepScanner.Types
+import qualified RevdepScanner.Types.NEMMap as NEM
+import           RevdepScanner.Types.NEMMap (NEMMap)
 
 -- | A normal dependency map. Each 'DepSpec' is tagged with an (optional)
 --   bool wrapper (e.g. 'Any' or 'All'), depending on the 'MatchMode'.
 newtype DepMap (m :: Maybe MatchMode) = DepMap
-    { getDepMap :: NEMap DepSpec (MatchLogic DepMap m) }
+    { getDepMap :: NEMMap DepSpec (MatchLogic DepMap m) }
 
 deriving stock instance Show (MatchLogic DepMap m)
     => Show (DepMap m)
@@ -38,7 +37,7 @@ deriving stock instance Eq (MatchLogic DepMap m)
     => Eq (DepMap m)
 deriving stock instance Ord (MatchLogic DepMap m)
     => Ord (DepMap m)
-deriving newtype instance Ord (MatchLogic DepMap m)
+deriving newtype instance (Ord (MatchLogic DepMap m), Semigroup (MatchLogic DepMap m))
     => Semigroup (DepMap m)
 
 -- | Multiple 'DepSpec's with the same 'Package' found within an 'OrGroup'.
@@ -46,7 +45,7 @@ deriving newtype instance Ord (MatchLogic DepMap m)
 --   tagged with an (optional) bool wrapper (e.g. 'Any' or 'All'), depending on
 --   the 'MatchMode'.
 newtype OrGroupMap m = OrGroupMap
-    { getOrGroupMap :: NEMap DepSpec (MatchLogic OrGroupMap m) }
+    { getOrGroupMap :: NEMMap DepSpec (MatchLogic OrGroupMap m) }
 
 deriving stock instance Show (MatchLogic OrGroupMap m)
     => Show (OrGroupMap m)
@@ -54,7 +53,7 @@ deriving stock instance Eq (MatchLogic OrGroupMap m)
     => Eq (OrGroupMap m)
 deriving stock instance Ord (MatchLogic OrGroupMap m)
     => Ord (OrGroupMap m)
-deriving newtype instance Ord (MatchLogic OrGroupMap m)
+deriving newtype instance (Ord (MatchLogic OrGroupMap m), Semigroup (MatchLogic OrGroupMap m))
     => Semigroup (OrGroupMap m)
 
 class   ( MatchLogic t 'Nothing ~ ()
@@ -67,10 +66,10 @@ class   ( MatchLogic t 'Nothing ~ ()
     type MatchLogic t (m :: Maybe MatchMode) :: Type
 
     -- | Apply the newtype wrapper
-    wrapDepMap :: NEMap DepSpec (MatchLogic t m) -> t m
+    wrapDepMap :: NEMMap DepSpec (MatchLogic t m) -> t m
 
     -- | Remove the 'NESet' from its newtype wrapper
-    unwrapDepMap :: t m -> NEMap DepSpec (MatchLogic t m)
+    unwrapDepMap :: t m -> NEMMap DepSpec (MatchLogic t m)
 
 instance IsDepMap DepMap where
     type MatchLogic DepMap ('Just 'Matching) = All
@@ -109,13 +108,13 @@ evalDepMap f ds
                     pure $ if b then Just l else Nothing
 
     finish
-        :: ( Map DepSpec (MatchLogic t ('Just m))
+        :: ( Maybe (NEMMap DepSpec (MatchLogic t ('Just m)))
             , MatchLogic t ('Just m))
         -> Maybe (t ('Just m))
     finish (m, l) = do
         -- Only return something if the whole depset is deemed relevant
         guard $ toBool l
-        wrapDepMap <$> NEM.nonEmptyMap m
+        wrapDepMap <$> m
 
 -- | Allows for working with type-level match modes when they can only be known
 --   at runtime. (Pattern match on the 'LiftedMatchMode' passed to your function

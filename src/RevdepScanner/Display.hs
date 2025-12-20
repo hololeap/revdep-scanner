@@ -10,9 +10,7 @@ module RevdepScanner.Display
 
 import qualified Data.List.NonEmpty as NEL
 import           Data.List.NonEmpty (NonEmpty(..))
-import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Monoidal.Strict as MM
 import qualified Data.Set as S
 import           Data.Set (Set)
 import Prettyprinter
@@ -25,6 +23,8 @@ import RevdepScanner.Types
 import qualified RevdepScanner.Types.ContextMap as CtxMap
 import           RevdepScanner.Types.ContextMap (ContextMap)
 import RevdepScanner.Types.DepMap
+import qualified RevdepScanner.Types.NEMMap as NEM
+import           RevdepScanner.Types.NEMMap (NEMMap)
 import RevdepScanner.Types.ResultMap
 
 prettyProblems
@@ -57,9 +57,9 @@ prettyResults
     :: forall m. AllDepMaps m '[ IsBool ]
     => EvaluatedResultMap m
     -> Doc AnsiStyle
-prettyResults = vsep . (go <=< M.toList)
+prettyResults = vsep . (go <=< MM.toList)
   where
-    go :: (PkgWithVer, NEMap DepVar (ContextMap ('Just m)))
+    go :: (PkgWithVer, NEMMap DepVar (ContextMap ('Just m)))
         -> [Doc AnsiStyle]
     go (pwv, m0) =
         fmap (annotate (color Cyan)) $ toDoc pwv : do

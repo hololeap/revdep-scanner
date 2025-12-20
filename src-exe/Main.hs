@@ -37,7 +37,7 @@ main = do
     liftMatchMode mode $ \(lmode :: LiftedMatchMode mode) -> case vDeps of
         Failure es -> error $ "Parsing failure: " ++ show es
         Success deps -> do
-            let (m :: ConstraintMap) = foldl' CM.union M.empty deps
+            let (m :: ConstraintMap) = mconcat deps
 
             when d $ pPrintForceColor deps
 

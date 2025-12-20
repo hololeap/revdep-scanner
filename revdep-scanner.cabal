@@ -46,6 +46,7 @@ library revdep-scanner-internal
         , RevdepScanner.Types.ConstraintMap
         , RevdepScanner.Types.ContextMap
         , RevdepScanner.Types.DepMap
+        , RevdepScanner.Types.NEMMap
         , RevdepScanner.Types.ResultMap
         , RevdepScanner.Util
     build-depends:
@@ -57,6 +58,7 @@ library revdep-scanner-internal
         , containers >=0.6.7 && <0.8
         , hashable ^>=1.4.7.0
         , list-t ^>= 1.0.5.7
+        , monoidal-containers ^>=0.6.5.0
         , mtl ^>=2.3.1
         , nonempty-containers ^>=0.3.4.4
         , prettyprinter ^>=1.7.1
@@ -103,6 +105,7 @@ test-suite revdep-scanner-test
         , parsable >=0.1 && <0.2
         , portage-hs >=0.1 && <0.3
         , containers >=0.6 && <0.8
+        , monoidal-containers ^>=0.6.5.0
         , nonempty-containers ^>=0.3.4.4
         , tasty <1.5
         , tasty-hunit <0.11

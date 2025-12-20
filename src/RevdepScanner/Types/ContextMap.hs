@@ -14,15 +14,14 @@ module RevdepScanner.Types.ContextMap
     ) where
 
 import qualified Data.List.NonEmpty as NEL
-import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
 import Data.Semigroup.Traversable
 
 import Distribution.Portage.Types
 
 import RevdepScanner.Types
 import RevdepScanner.Types.DepMap
-import RevdepScanner.Util
+import qualified RevdepScanner.Types.NEMMap as NEM
+import           RevdepScanner.Types.NEMMap (NEMMap)
 
 -- | A map from an optional specific context to its dependency map. This can
 --   hold a normal @NEMap (Maybe DepContext) (DepMap m)@, a variant for
@@ -30,11 +29,11 @@ import RevdepScanner.Util
 --   at least one element.
 data ContextMap (m :: Maybe MatchMode) where
     MixedCtxMap
-        :: NEMap (Maybe DepContext) (DepMap m)
-        -> NEMap OrContext (OrGroupMap m)
+        :: NEMMap (Maybe DepContext) (DepMap m)
+        -> NEMMap OrContext (OrGroupMap m)
         -> ContextMap m
-    NormalCtxMap :: NEMap (Maybe DepContext) (DepMap m) -> ContextMap m
-    OrGroupCtxMap :: NEMap OrContext (OrGroupMap m) -> ContextMap m
+    NormalCtxMap :: NEMMap (Maybe DepContext) (DepMap m) -> ContextMap m
+    OrGroupCtxMap :: NEMMap OrContext (OrGroupMap m) -> ContextMap m
 
 deriving instance
         ( Show (MatchLogic DepMap m)
@@ -47,26 +46,28 @@ deriving instance
    => Eq (ContextMap m)
 
 instance ( Ord (MatchLogic DepMap m)
-         , Ord (MatchLogic OrGroupMap m) )
+         , Ord (MatchLogic OrGroupMap m)
+         , Semigroup (MatchLogic DepMap m)
+         , Semigroup (MatchLogic OrGroupMap m))
          => Semigroup (ContextMap m) where
     MixedCtxMap nm1 om1 <> MixedCtxMap nm2 om2
-        = MixedCtxMap (nm1 %% nm2) (om1 %% om2)
+        = MixedCtxMap (nm1 <> nm2) (om1 <> om2)
     MixedCtxMap nm1 om1 <> NormalCtxMap nm2
-        = MixedCtxMap (nm1 %% nm2) om1
+        = MixedCtxMap (nm1 <> nm2) om1
     MixedCtxMap nm1 om1 <> OrGroupCtxMap om2
-        = MixedCtxMap nm1 (om1 %% om2)
+        = MixedCtxMap nm1 (om1 <> om2)
     NormalCtxMap nm1 <> MixedCtxMap nm2 om2
-        = MixedCtxMap (nm1 %% nm2) om2
+        = MixedCtxMap (nm1 <> nm2) om2
     NormalCtxMap nm1 <> NormalCtxMap nm2
-        = NormalCtxMap (nm1 %% nm2)
+        = NormalCtxMap (nm1 <> nm2)
     NormalCtxMap nm1 <> OrGroupCtxMap om2
         = MixedCtxMap nm1 om2
     OrGroupCtxMap om1 <> MixedCtxMap nm2 om2
-        = MixedCtxMap nm2 (om1 %% om2)
+        = MixedCtxMap nm2 (om1 <> om2)
     OrGroupCtxMap om1 <> NormalCtxMap nm2
         = MixedCtxMap nm2 om1
     OrGroupCtxMap om1 <> OrGroupCtxMap om2
-        = OrGroupCtxMap (om1 %% om2)
+        = OrGroupCtxMap (om1 <> om2)
 
 -- | Evaluate all the dependency maps inside a 'ContextMap', removing any that
 --   are deemed non-relevant. This will return @Nothing@ in the case that no

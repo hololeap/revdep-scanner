@@ -4,20 +4,16 @@
 module RevdepScanner.Types.ConstraintMap
     ( ConstraintMap
     , insert
-    , union
-    , unions
     , singleton
     , buildCMap
     ) where
 
 import Control.Monad.Trans.Accum
-import Data.Foldable
-import qualified Data.HashMap.Strict as HM
-import           Data.HashMap.Strict (HashMap)
+import qualified Data.HashMap.Monoidal as HM
+import           Data.HashMap.Monoidal (MonoidalHashMap)
 import qualified Data.List.NonEmpty as NEL
-import qualified Data.Map.NonEmpty as NEM
-import qualified Data.Map.Strict as M
-import           Data.Map.Strict (Map)
+import qualified Data.Map.Monoidal.Strict as M
+import           Data.Map.Monoidal.Strict (MonoidalMap)
 import Data.Monoid
 
 import Distribution.Portage.Types
@@ -27,13 +23,14 @@ import RevdepScanner.Types
 import qualified RevdepScanner.Types.ContextMap as CtxMap
 import           RevdepScanner.Types.ContextMap (ContextMap)
 import RevdepScanner.Types.DepMap
+import qualified RevdepScanner.Types.NEMMap as NEM
 import RevdepScanner.Types.ResultMap
 
 -- | Organized by @'Package'@ (@(Category, PkgName)@)
 --
 --   The inner map is keyed by the @'PkgWithVer'@ and contains a set of
 --   @'DepWithCtx'@ that match the same @Package@ as the outermost key.
-type ConstraintMap = HashMap Package UnevaluatedResultMap
+type ConstraintMap = MonoidalHashMap Package UnevaluatedResultMap
 
 insert
     :: Package
@@ -45,13 +42,7 @@ insert
     -> ConstraintMap
     -> ConstraintMap
 insert pkg pwv dVar ctx
-    = (singleton pkg pwv dVar ctx `union`)
-
-union :: ConstraintMap -> ConstraintMap -> ConstraintMap
-union = HM.unionWith unionUnevaluatedResultMaps
-
-unions :: [ConstraintMap] -> ConstraintMap
-unions = foldl' union HM.empty
+    = (singleton pkg pwv dVar ctx <>)
 
 singleton
     :: Package
@@ -124,7 +115,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
         -> DepVarMap
         -> ConstraintMap
     finalize var (DepVarMap m0)
-        = unions $ do
+        = mconcat $ do
             let pwv = PkgWithVer p0 v0
             (pkg, cm) <- M.toList m0
             e <- CtxMap.toList cm >>= \case
@@ -148,7 +139,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
 -- | Internal data structure for organizing a 'DepVar' entry
 newtype DepVarMap = DepVarMap
     { getDepVarMap
-        :: Map Package (ContextMap 'Nothing)
+        :: MonoidalMap Package (ContextMap 'Nothing)
     } deriving (Show)
 
 instance Semigroup DepVarMap where

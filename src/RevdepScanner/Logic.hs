@@ -7,7 +7,7 @@ module RevdepScanner.Logic
     , isSpecRelevant
     ) where
 
-import qualified Data.HashMap.Strict as HM
+import qualified Data.HashMap.Monoidal as HM
 
 import Distribution.Portage.Types
 

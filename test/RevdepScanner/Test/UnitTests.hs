@@ -6,11 +6,9 @@ module RevdepScanner.Test.UnitTests
     ( simpleTests
     ) where
 
-import qualified Data.HashMap.Strict as HM
+import qualified Data.HashMap.Monoidal as HM
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Monoidal.Strict as M
 import Data.Monoid
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -26,6 +24,8 @@ import RevdepScanner.Types
 import RevdepScanner.Types.ConstraintMap
 import           RevdepScanner.Types.ContextMap (ContextMap(..), evalContextMap)
 import RevdepScanner.Types.DepMap
+import qualified RevdepScanner.Types.NEMMap as NEM
+import           RevdepScanner.Types.NEMMap (NEMMap)
 import RevdepScanner.Types.ResultMap
 import RevdepScanner.Util
 
@@ -864,5 +864,5 @@ parseDepBlock cat pkg v b
         Left e -> error $ "Could not parse Version " ++ show v ++ ": " ++ show e
 
 
-type UnwrappedMap m = NEMap DepVar (ContextMap m)
+type UnwrappedMap m = NEMMap DepVar (ContextMap m)
 
