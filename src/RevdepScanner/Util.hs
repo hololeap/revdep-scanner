@@ -3,8 +3,6 @@ module RevdepScanner.Util
     ) where
 
 import qualified Data.ByteString as BS
-import qualified Data.Map.NonEmpty as NEM
-import           Data.Map.NonEmpty (NEMap)
 import Data.Text.Encoding (encodeUtf8)
 import qualified Data.Text as T
 
