@@ -3,9 +3,9 @@
 module Main (main) where
 
 import Conduit
+import qualified Control.Foldl as Foldl
+import           Control.Foldl (fold)
 import Control.Monad
-import Data.List as L
-import qualified Data.HashMap.Strict as M
 import Data.Monoid
 import qualified ListT
 import Prettyprinter
@@ -37,7 +37,7 @@ main = do
     liftMatchMode mode $ \(lmode :: LiftedMatchMode mode) -> case vDeps of
         Failure es -> error $ "Parsing failure: " ++ show es
         Success deps -> do
-            let (m :: ConstraintMap) = mconcat deps
+            let (m :: ConstraintMap) = fold Foldl.mconcat deps
 
             when d $ pPrintForceColor deps
 

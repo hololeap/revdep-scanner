@@ -10,6 +10,8 @@ module RevdepScanner.Types.ConstraintMap
     , buildCMap
     ) where
 
+import qualified Control.Foldl as Foldl
+-- import           Control.Foldl (FoldM, Fold, fold)
 import Control.DeepSeq
 import Control.Monad.Trans.Accum
 import qualified Data.HashMap.Monoidal as HM
@@ -66,14 +68,14 @@ buildCMap :: PkgDeps -> ConstraintMap
 buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
     -- Needs to find all packages referenced by any of the blocks, note
     -- which package the dep block lives in, and its name.
-    flip evalAccum mempty $ flip foldMapA
+    flip evalAccum mempty $ flip foldMapM
         [ (DEPEND, depBlock)
         , (RDEPEND, rdepBlock)
         , (BDEPEND, bdepBlock)
         , (PDEPEND, pdepBlock)
         , (IDEPEND, idepBlock)
         ] $ \(var, DepBlock blk) ->
-            foldMap (finalize var) <$> foldMapA fromGroup blk
+            Foldl.foldM (foldMap (finalize var) <$> Foldl.sink fromGroup) blk
   where
     fromGroup
         :: Either DepGroup DepSpec
@@ -82,18 +84,18 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
         Left g -> do
             case g of
                 -- "And" groups are very basic. We don't need to remember them
-                AndGroup ne -> foldMapA fromGroup ne
+                AndGroup ne -> foldMapM fromGroup ne
                 -- The other groups are more complex and should be saved as
                 -- context for the output
                 OrGroup ne -> do
                     add $ pure $ Right $ OrCtx ne
-                    foldMapA fromGroup ne
+                    foldMapM fromGroup ne
                 UseGroup ne u -> do
                     add $ pure $ Left $ UseCtx ne u
-                    foldMapA fromGroup ne
+                    foldMapM fromGroup ne
                 NotUseGroup ne u -> do
                     add $ pure $ Left $ NotUseCtx ne u
-                    foldMapA fromGroup ne
+                    foldMapM fromGroup ne
         Right s
             | isBlocker s -> pure Nothing -- Skip blockers
             | otherwise -> Just <$> do

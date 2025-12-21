@@ -7,6 +7,8 @@ module RevdepScanner.Logic
     , isSpecRelevant
     ) where
 
+import qualified Control.Foldl as Foldl
+import           Control.Foldl (fold)
 import qualified Data.HashMap.Monoidal as HM
 
 import Distribution.Portage.Types
@@ -35,7 +37,7 @@ lookupResults
     -> ConstraintMap
     -> EvaluatedResultMap m
 lookupResults mode cp
-    = foldMap (evalResultMap (isSpecRelevant mode cp))
+    = fold (Foldl.foldMap (evalResultMap (isSpecRelevant mode cp)) id)
     . HM.lookup (cmdlinePkgPackage cp)
   where
 
