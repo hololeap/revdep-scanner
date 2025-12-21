@@ -68,14 +68,18 @@ buildCMap :: PkgDeps -> ConstraintMap
 buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
     -- Needs to find all packages referenced by any of the blocks, note
     -- which package the dep block lives in, and its name.
-    flip evalAccum mempty $ flip foldMapM
-        [ (DEPEND, depBlock)
-        , (RDEPEND, rdepBlock)
-        , (BDEPEND, bdepBlock)
-        , (PDEPEND, pdepBlock)
-        , (IDEPEND, idepBlock)
-        ] $ \(var, DepBlock blk) ->
-            Foldl.foldM (foldMap (finalize var) <$> Foldl.sink fromGroup) blk
+    let vars =
+            [ (DEPEND, depBlock)
+            , (RDEPEND, rdepBlock)
+            , (BDEPEND, bdepBlock)
+            , (PDEPEND, pdepBlock)
+            , (IDEPEND, idepBlock)
+            ]
+        act :: (DepVar, DepBlock)
+            -> Accum (First (Either DepContext OrContext)) ConstraintMap
+        act (var, DepBlock blk)
+            = Foldl.foldM (foldMap (finalize var) <$> Foldl.sink fromGroup) blk
+    in  Foldl.fold (Foldl.foldMap (\v -> evalAccum (act v) mempty) id) vars
   where
     fromGroup
         :: Either DepGroup DepSpec
