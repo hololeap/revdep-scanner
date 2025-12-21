@@ -16,6 +16,7 @@ module RevdepScanner.Types
     , IsBool(..)
     ) where
 
+import Control.DeepSeq (NFData)
 import Data.Hashable
 import Data.Kind
 import Data.List.NonEmpty (NonEmpty(..))
@@ -32,7 +33,7 @@ data PkgWithVer = PkgWithVer
     , pwvVersion :: Version
     }
     deriving stock (Show, Eq, Ord, Generic)
-    deriving anyclass Hashable
+    deriving anyclass (Hashable, NFData)
 
 instance Printable PkgWithVer where
     toString (PkgWithVer p v) = toString p ++ "-" ++ toString v
@@ -50,7 +51,8 @@ instance Parsable PkgWithVer st String where
 data CmdlinePkg
     = CmdlinePackage Package
     | CmdlinePkgWithVer PkgWithVer
-    deriving (Show, Eq, Ord, Generic, Hashable)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass (Hashable, NFData)
 
 instance Printable CmdlinePkg where
     toString (CmdlinePackage p) = toString p
@@ -79,7 +81,8 @@ cmdlinePkgPackage = \case
 data MatchMode
     = Matching
     | NonMatching
-    deriving (Show, Eq, Ord)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass NFData
 
 -- | Lifts into a type-level match mode from a data-level representation
 data LiftedMatchMode :: MatchMode -> Type where
@@ -104,7 +107,8 @@ data LiftedMatchMode :: MatchMode -> Type where
 data DepContext
     = UseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
     | NotUseCtx (NonEmpty (Either DepGroup DepSpec)) UseFlag
-    deriving (Show, Eq, Ord, Generic, Hashable)
+    deriving stock (Show, Eq, Ord, Generic)
+    deriving anyclass (Hashable, NFData)
 
 instance Printable DepContext where
     toString = \case
@@ -117,7 +121,7 @@ instance Printable DepContext where
 newtype OrContext
     = OrCtx (NonEmpty (Either DepGroup DepSpec))
     deriving stock (Show, Eq, Ord, Generic)
-    deriving anyclass Hashable
+    deriving anyclass (Hashable, NFData)
 
 instance Printable OrContext where
     toString (OrCtx ne) = toString $ OrGroup ne

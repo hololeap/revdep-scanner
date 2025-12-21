@@ -1,5 +1,7 @@
 {-# Language AllowAmbiguousTypes #-}
 {-# Language DataKinds #-}
+{-# Language DeriveAnyClass #-}
+{-# Language DeriveGeneric #-}
 {-# Language DerivingVia #-}
 {-# Language LambdaCase #-}
 {-# Language TypeApplications #-}
@@ -15,10 +17,12 @@ module RevdepScanner.Types.DepMap
     , AllDepMaps
     ) where
 
+import Control.DeepSeq (NFData)
 import Control.Monad
 import Control.Monad.Writer
 import Data.Kind
 import Data.Monoid
+import GHC.Generics (Generic)
 
 import Distribution.Portage.Types
 
@@ -30,6 +34,7 @@ import           RevdepScanner.Types.NEMMap (NEMMap)
 --   bool wrapper (e.g. 'Any' or 'All'), depending on the 'MatchMode'.
 newtype DepMap (m :: Maybe MatchMode) = DepMap
     { getDepMap :: NEMMap DepSpec (MatchLogic DepMap m) }
+    deriving stock Generic
 
 deriving stock instance Show (MatchLogic DepMap m)
     => Show (DepMap m)
@@ -39,6 +44,8 @@ deriving stock instance Ord (MatchLogic DepMap m)
     => Ord (DepMap m)
 deriving newtype instance (Ord (MatchLogic DepMap m), Semigroup (MatchLogic DepMap m))
     => Semigroup (DepMap m)
+deriving anyclass instance NFData (MatchLogic DepMap m)
+    => NFData (DepMap m)
 
 -- | Multiple 'DepSpec's with the same 'Package' found within an 'OrGroup'.
 --   (This special case needs to be handled differently.) Each 'DepSpec' is
@@ -46,6 +53,7 @@ deriving newtype instance (Ord (MatchLogic DepMap m), Semigroup (MatchLogic DepM
 --   the 'MatchMode'.
 newtype OrGroupMap m = OrGroupMap
     { getOrGroupMap :: NEMMap DepSpec (MatchLogic OrGroupMap m) }
+    deriving stock Generic
 
 deriving stock instance Show (MatchLogic OrGroupMap m)
     => Show (OrGroupMap m)
@@ -55,6 +63,8 @@ deriving stock instance Ord (MatchLogic OrGroupMap m)
     => Ord (OrGroupMap m)
 deriving newtype instance (Ord (MatchLogic OrGroupMap m), Semigroup (MatchLogic OrGroupMap m))
     => Semigroup (OrGroupMap m)
+deriving anyclass instance NFData (MatchLogic OrGroupMap m)
+    => NFData (OrGroupMap m)
 
 class   ( MatchLogic t 'Nothing ~ ()
         , IsBool (MatchLogic t ('Just 'Matching))

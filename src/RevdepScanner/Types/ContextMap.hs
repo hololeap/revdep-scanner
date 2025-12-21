@@ -1,5 +1,7 @@
 {-# Language AllowAmbiguousTypes #-}
 {-# Language DataKinds #-}
+{-# Language DeriveAnyClass #-}
+{-# Language DeriveGeneric #-}
 {-# Language DerivingVia #-}
 {-# Language LambdaCase #-}
 {-# Language TypeApplications #-}
@@ -13,8 +15,10 @@ module RevdepScanner.Types.ContextMap
     , toList
     ) where
 
+import Control.DeepSeq (NFData)
 import qualified Data.List.NonEmpty as NEL
 import Data.Semigroup.Traversable
+import GHC.Generics (Generic)
 
 import Distribution.Portage.Types
 
@@ -34,6 +38,7 @@ data ContextMap (m :: Maybe MatchMode) where
         -> ContextMap m
     NormalCtxMap :: NEMMap (Maybe DepContext) (DepMap m) -> ContextMap m
     OrGroupCtxMap :: NEMMap OrContext (OrGroupMap m) -> ContextMap m
+    deriving stock Generic
 
 deriving instance
         ( Show (MatchLogic DepMap m)
@@ -44,6 +49,11 @@ deriving instance
         ( Eq (MatchLogic DepMap m)
         , Eq (MatchLogic OrGroupMap m) )
    => Eq (ContextMap m)
+
+deriving anyclass instance
+        ( NFData (MatchLogic DepMap m)
+        , NFData (MatchLogic OrGroupMap m) )
+    => NFData (ContextMap m)
 
 instance ( Ord (MatchLogic DepMap m)
          , Ord (MatchLogic OrGroupMap m)

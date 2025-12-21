@@ -8,6 +8,7 @@ module RevdepScanner.Types.ConstraintMap
     , buildCMap
     ) where
 
+import Control.DeepSeq
 import Control.Monad.Trans.Accum
 import qualified Data.HashMap.Monoidal as HM
 import           Data.HashMap.Monoidal (MonoidalHashMap)
@@ -125,7 +126,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
                 Right (ctx, OrGroupMap om) -> do
                     (spec, ()) <- NEL.toList $ NEM.toList om
                     pure $ Right (ctx, spec)
-            pure $ singleton pkg pwv var e
+            pure $ force $ singleton pkg pwv var e
 
     isBlocker :: DepSpec -> Bool
     isBlocker = \case
