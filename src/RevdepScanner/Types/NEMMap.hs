@@ -79,5 +79,7 @@ mapMaybe
     -> Maybe (NEMMap k b)
 mapMaybe f = nonEmptyMap . NEM.mapMaybe f . getNEMMap
 
+-- | Transform a 'NEMMap' to a 'MonoidalMap'. Creates an empty 'MonoidalMap'
+--   if given @Nothing@.
 toMap :: (Ord k, Semigroup a) => Maybe (NEMMap k a) -> MonoidalMap k a
 toMap m = fold $ MM.MonoidalMap . NEM.toMap . getNEMMap <$> m
