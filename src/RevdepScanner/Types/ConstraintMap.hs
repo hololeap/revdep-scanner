@@ -1,4 +1,6 @@
 {-# Language DataKinds #-}
+{-# Language DerivingVia #-}
+{-# Language GeneralizedNewtypeDeriving #-}
 {-# Language LambdaCase #-}
 
 module RevdepScanner.Types.ConstraintMap
@@ -13,8 +15,6 @@ import Control.Monad.Trans.Accum
 import qualified Data.HashMap.Monoidal as HM
 import           Data.HashMap.Monoidal (MonoidalHashMap)
 import qualified Data.List.NonEmpty as NEL
-import qualified Data.Map.Monoidal.Strict as M
-import           Data.Map.Monoidal.Strict (MonoidalMap)
 import Data.Monoid
 
 import Distribution.Portage.Types
@@ -24,6 +24,7 @@ import RevdepScanner.Types
 import qualified RevdepScanner.Types.ContextMap as CtxMap
 import           RevdepScanner.Types.ContextMap (ContextMap)
 import RevdepScanner.Types.DepMap
+import           RevdepScanner.Types.NEMMap (NEMMap)
 import qualified RevdepScanner.Types.NEMMap as NEM
 import RevdepScanner.Types.ResultMap
 
@@ -108,7 +109,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
                             Just (Right oc) -> Right (oc, s)
 
                 pure $ DepVarMap
-                     $ M.singleton p
+                     $ NEM.singleton p
                      $ CtxMap.singleton ctx
 
     finalize
@@ -118,7 +119,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
     finalize var (DepVarMap m0)
         = mconcat $ do
             let pwv = PkgWithVer p0 v0
-            (pkg, cm) <- M.toList m0
+            (pkg, cm) <- NEL.toList $ NEM.toList m0
             e <- CtxMap.toList cm >>= \case
                 Left (ctx, DepMap nm) -> do
                     (spec, ()) <- NEL.toList $ NEM.toList nm
@@ -134,17 +135,14 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
         UnversionedDepSpec (Just _) _ _ _ -> True
         _ -> False
 
-    foldMapA :: (Applicative f, Foldable t, Monoid b) => (a -> f b) -> t a -> f b
-    foldMapA f = getAp . foldMap (Ap . f)
+    foldMapM :: (Monad m, Foldable f, Monoid b) => (a -> m b) -> f a -> m b
+    foldMapM f = Foldl.foldM (Foldl.sink f)
+
 
 -- | Internal data structure for organizing a 'DepVar' entry
 newtype DepVarMap = DepVarMap
     { getDepVarMap
-        :: MonoidalMap Package (ContextMap 'Nothing)
-    } deriving (Show)
-
-instance Semigroup DepVarMap where
-    DepVarMap m1 <> DepVarMap m2 = DepVarMap $ M.unionWith (<>) m1 m2
-
-instance Monoid DepVarMap where
-    mempty = DepVarMap M.empty
+        :: NEMMap Package (ContextMap 'Nothing)
+    }
+    deriving stock (Show)
+    deriving newtype Semigroup
