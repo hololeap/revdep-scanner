@@ -60,7 +60,7 @@ library revdep-scanner-internal
         , containers >=0.6.7 && <0.8
         , deepseq >=1.4.8.0 && <1.6
         , foldl ^>=1.4.16
-        , hashable ^>=1.4.7.0
+        , hashable >=1.4.7.0 && <1.6
         , list-t ^>= 1.0.5.7
         , monoidal-containers ^>=0.6.5.0
         , mtl ^>=2.3.1
