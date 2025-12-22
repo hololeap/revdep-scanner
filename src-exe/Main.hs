@@ -23,7 +23,6 @@ import RevdepScanner.Display
 import RevdepScanner.Logic
 import RevdepScanner.Types
 import           RevdepScanner.Types.ConstraintMap (ConstraintMap)
-import qualified RevdepScanner.Types.ConstraintMap as CM
 import RevdepScanner.Types.DepMap
 
 main :: IO ()
@@ -32,7 +31,7 @@ main = do
 
     vDeps <- runExeEnv $ do
         when d $ liftIO $ print $ unwords $ "pquery" : args repo
-        getPqueryDump ["--repo", unwrapRepository repo] CM.buildCMap
+        getPqueryDump ["--repo", unwrapRepository repo] buildCMap
 
     liftMatchMode mode $ \(lmode :: LiftedMatchMode mode) -> case vDeps of
         Failure es -> error $ "Parsing failure: " ++ show es

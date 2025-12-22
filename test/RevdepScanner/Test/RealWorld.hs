@@ -20,7 +20,7 @@ import Data.Parsable
 import Distribution.Gentoo.Utils.Pquery
 import Distribution.Portage.Types
 
-import RevdepScanner.Types.ConstraintMap
+import RevdepScanner.Logic
 import RevdepScanner.Types.DepMap
 import qualified RevdepScanner.Types.ContextMap as CTX
 import qualified RevdepScanner.Types.NEMMap as NEM
