@@ -3,25 +3,25 @@ packages: .
 source-repository-package
     type: git
     location: https://github.com/hololeap/cabal-portage.git
-    tag: bc891102ae8569429aa68b90282aa795730951b4
+    tag: c0ecc2e01dfd565ade4870fb206aaba3bfd80bec
     subdir: parsable
 
 source-repository-package
     type: git
     location: https://github.com/hololeap/cabal-portage.git
-    tag: bc891102ae8569429aa68b90282aa795730951b4
+    tag: c0ecc2e01dfd565ade4870fb206aaba3bfd80bec
     subdir: parsable-test
 
 source-repository-package
     type: git
     location: https://github.com/hololeap/cabal-portage.git
-    tag: bc891102ae8569429aa68b90282aa795730951b4
+    tag: c0ecc2e01dfd565ade4870fb206aaba3bfd80bec
     subdir: portage-hs
 
 source-repository-package
     type: git
     location: https://github.com/hololeap/cabal-portage.git
-    tag: bc891102ae8569429aa68b90282aa795730951b4
+    tag: c0ecc2e01dfd565ade4870fb206aaba3bfd80bec
     subdir: gentoo-utils
 
 source-repository-package
