@@ -12,6 +12,7 @@ module RevdepScanner.Test.RealWorld
     ) where
 
 import qualified Data.HashMap.Monoidal as HM
+import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Monoidal.Strict as M
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -38,14 +39,25 @@ realWorldTests = testGroup "real-world tests"
         s <- readFile fn
         let pd = (read s) :: PkgDeps
             cm = buildCMap pd
-        Just () @=? do
+            ctx = UseCtx
+                    (NEL.fromList
+                        [ Right $ runParsable' ">=dev-haskell/hunit-1.2"
+                        , Right $ runParsable' ">=dev-haskell/quickcheck-2.4"
+                        , Right $ runParsable' "dev-haskell/random"
+                        , Right $ runParsable' ">=dev-haskell/test-framework-0.4"
+                        , Right $ runParsable' ">=dev-haskell/test-framework-hunit-0.2"
+                        , Right $ runParsable' ">=dev-haskell/test-framework-quickcheck2-0.2"
+                        , Right $ runParsable' "dev-haskell/text"
+                        ]
+                    ) "test"
+            dm :: DepMap 'Nothing
+            dm = DepMap $ NEM.singleton (runParsable' "dev-haskell/random") ()
+        Just dm @=? do
             a <- HM.lookup (runParsable' rndm) cm
             b <- M.lookup (runParsable' pkg) $ NEM.toMap $ Just a
             c <- M.lookup DEPEND $ NEM.toMap $ Just b
-            (d,_) <- getCtx c
-            e <- M.lookup Nothing $ NEM.toMap $ Just d
-            M.lookup (runParsable' rndm)
-                $ NEM.toMap $ Just $ getDepMap e
+            d <- getCtx c
+            M.lookup (Just ctx) $ NEM.toMap $ Just d
     ]
 
 runParsable' :: Parsable a PureMode String => String -> a
@@ -53,7 +65,7 @@ runParsable' s =
     let (Right x) = runParsable (encodeString s)
     in x
 
-getCtx :: CTX.ContextMap 'Nothing -> Maybe (NEM.NEMMap (Maybe DepContext) (DepMap 'Nothing), NEM.NEMMap OrContext (OrGroupMap 'Nothing))
+getCtx :: CTX.ContextMap 'Nothing -> Maybe (NEM.NEMMap (Maybe DepContext) (DepMap 'Nothing))
 getCtx = \case
-    CTX.MixedCtxMap nm om -> Just (nm, om)
+    CTX.NormalCtxMap nm -> Just nm
     _ -> Nothing
