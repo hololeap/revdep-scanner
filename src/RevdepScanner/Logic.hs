@@ -12,7 +12,7 @@ module RevdepScanner.Logic
 import Control.DeepSeq
 import qualified Control.Foldl as Foldl
 import           Control.Foldl (fold)
-import Control.Monad.Trans.Accum
+import Control.Monad.Reader
 import qualified Data.HashMap.Monoidal as HM
 import qualified Data.List.NonEmpty as NEL
 import Data.Monoid
@@ -86,14 +86,14 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
             , (IDEPEND, idepBlock)
             ]
         act :: (DepVar, DepBlock)
-            -> Accum (First (Either DepContext OrContext)) ConstraintMap
+            -> Reader (First (Either DepContext OrContext)) ConstraintMap
         act (var, DepBlock blk)
             = Foldl.foldM (foldMap (finalize var) <$> Foldl.sink fromGroup) blk
-    in  Foldl.fold (Foldl.foldMap (\v -> evalAccum (act v) mempty) id) vars
+    in  Foldl.fold (Foldl.foldMap (\v -> runReader (act v) mempty) id) vars
   where
     fromGroup
         :: Either DepGroup DepSpec
-        -> Accum (First (Either DepContext OrContext)) (Maybe DepVarMap)
+        -> Reader (First (Either DepContext OrContext)) (Maybe DepVarMap)
     fromGroup = \case
         Left g -> do
             case g of
@@ -102,14 +102,14 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
                 -- The other groups are more complex and should be saved as
                 -- context for the output
                 OrGroup ne -> do
-                    add $ pure $ Right $ OrCtx ne
-                    foldMapM fromGroup ne
+                    local (<> pure (Right (OrCtx ne)))
+                        $ foldMapM fromGroup ne
                 UseGroup ne u -> do
-                    add $ pure $ Left $ UseCtx ne u
-                    foldMapM fromGroup ne
+                    local (<> pure (Left (UseCtx ne u)))
+                        $ foldMapM fromGroup ne
                 NotUseGroup ne u -> do
-                    add $ pure $ Left $ NotUseCtx ne u
-                    foldMapM fromGroup ne
+                    local (<> pure (Left (NotUseCtx ne u)))
+                        $ foldMapM fromGroup ne
         Right s
             | isBlocker s -> pure Nothing -- Skip blockers
             | otherwise -> Just <$> do
@@ -117,7 +117,7 @@ buildCMap (PkgDeps (p0,v0,_) depBlock rdepBlock bdepBlock pdepBlock idepBlock) =
                         VersionedDepSpec _ vp _ _ -> vPkgPackage vp
                         UnversionedDepSpec _ p' _ _ -> p'
 
-                First mCtx <- look
+                First mCtx <- ask
 
                 let ctx = case mCtx of
                             Nothing -> Left (Nothing, s)
