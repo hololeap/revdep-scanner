@@ -3,7 +3,7 @@ name:               revdep-scanner
 version:            0.1.0.0
 synopsis:           Scan Gentoo repositories for reverse dependencies
 
-tested-with:        GHC == { 9.2.8, 9.4.8, 9.6.6, 9.8.4, 9.10.1, 9.12.1 }
+tested-with:        GHC == { 9.4.8, 9.6.6, 9.8.4, 9.10.1, 9.12.1 }
 -- description:
 homepage:           https://github.com/gentoo-haskell/revdep-scanner
 license:            AGPL-3.0-only
