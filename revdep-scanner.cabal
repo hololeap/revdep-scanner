@@ -73,6 +73,10 @@ library revdep-scanner-internal
         , transformers >=0.5.6.2 && <0.7
     hs-source-dirs:   src
 
+    if impl(ghc < 9.6)
+      build-depends:
+        , foldable1-classes-compat ^>=0.1.1
+
     default-language: GHC2021
 
 executable revdep-scanner
