@@ -16,7 +16,9 @@ build-type:         Simple
 extra-doc-files:
     CHANGELOG.md
     README.md
--- extra-source-files:
+extra-source-files:
+    test/data/**/*.stdout
+    test/data/**/*.show
 
 source-repository head
     type:           git
@@ -100,13 +102,18 @@ test-suite revdep-scanner-test
     hs-source-dirs:   test
     main-is:          TestMain.hs
     other-modules:
+        , RevdepScanner.Test.RealWorld
         , RevdepScanner.Test.UnitTests
+        , Paths_revdep_scanner
+    autogen-modules:
+        , Paths_revdep_scanner
     build-depends:
         , revdep-scanner:revdep-scanner-internal
         , base >=4.16 && <4.22
         , gentoo-utils ^>=0.1
         , parsable >=0.1 && <0.2
         , portage-hs >=0.1 && <0.3
+        , bytestring >=0.11.4.0 && <0.13
         , containers >=0.6 && <0.8
         , monoidal-containers ^>=0.6.5.0
         , nonempty-containers ^>=0.3.4.4
